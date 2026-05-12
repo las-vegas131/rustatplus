@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # для экспорта Excel, графики теперь Plotly
 import io
 import os
 import pickle
@@ -11,33 +11,10 @@ from pathlib import Path
 import warnings
 import psycopg2
 from dotenv import load_dotenv
-
-# -------------------- ПРОВЕРКА ПОДКЛЮЧЕНИЯ К БД --------------------
-def check_db_connection():
-    required_vars = ["SUPABASE_HOST", "SUPABASE_PORT", "SUPABASE_DBNAME", 
-                     "SUPABASE_USER", "SUPABASE_PASSWORD"]
-    missing = [var for var in required_vars if not os.getenv(var)]
-    if missing:
-        st.error(f"❌ Отсутствуют переменные окружения: {', '.join(missing)}. "
-                 f"Добавьте их в файл `.env`.")
-        st.stop()
-    try:
-        conn = psycopg2.connect(
-            host=os.getenv("SUPABASE_HOST"),
-            port=os.getenv("SUPABASE_PORT"),
-            dbname=os.getenv("SUPABASE_DBNAME"),
-            user=os.getenv("SUPABASE_USER"),
-            password=os.getenv("SUPABASE_PASSWORD"),
-        )
-        conn.close()
-    except Exception as e:
-        st.error(f"❌ Не удалось подключиться к базе данных: {e}")
-        st.stop()
+import plotly.graph_objects as go
 
 warnings.filterwarnings('ignore')
 load_dotenv()
-check_db_connection()  
-
 
 # -------------------- ГЛОБАЛЬНЫЕ КОНСТАНТЫ --------------------
 MIN_MINUTES = 90
@@ -144,7 +121,7 @@ METRIC_NAMES_RU = {
     'actions_unsuccessful_p90': 'Неуспешные действия',
 }
 
-# -------------------- ПАРАМЕТРЫ ПОДКЛЮЧЕНИЯ К БД --------------------
+# -------------------- БЕЗОПАСНОЕ ПОДКЛЮЧЕНИЕ К БД --------------------
 def get_db_config():
     return {
         "host": os.getenv("SUPABASE_HOST"),
@@ -153,6 +130,24 @@ def get_db_config():
         "user": os.getenv("SUPABASE_USER"),
         "password": os.getenv("SUPABASE_PASSWORD"),
     }
+
+def check_db_connection():
+    required_vars = ["SUPABASE_HOST", "SUPABASE_PORT", "SUPABASE_DBNAME",
+                     "SUPABASE_USER", "SUPABASE_PASSWORD"]
+    missing = [var for var in required_vars if not os.getenv(var)]
+    if missing:
+        st.error(f"❌ Отсутствуют переменные окружения: {', '.join(missing)}. "
+                 f"Добавьте их в файл `.env`.")
+        st.stop()
+    try:
+        conn = psycopg2.connect(**get_db_config())
+        conn.close()
+    except Exception as e:
+        st.error(f"❌ Не удалось подключиться к базе данных: {e}")
+        st.stop()
+
+# Проверка при старте
+check_db_connection()
 
 # -------------------- ФУНКЦИИ АНАЛИЗА --------------------
 def load_settings():
@@ -415,41 +410,40 @@ def build_main_table(df, selected_metrics):
         main_data.append(row_data)
     return pd.DataFrame(main_data, columns=main_headers)
 
-# -------------------- ВИЗУАЛИЗАЦИЯ --------------------
-def plot_radar_on_axis(ax, player_row, team_avg, radar_metrics, df, title=None, color='blue', show_legend=True):
+# -------------------- ВИЗУАЛИЗАЦИЯ (Plotly) --------------------
+def get_full_df():
+    dfs = []
+    if st.session_state.df_excel is not None:
+        dfs.append(st.session_state.df_excel)
+    if st.session_state.df_db is not None:
+        dfs.append(st.session_state.df_db)
+    return pd.concat(dfs, ignore_index=True) if dfs else None
+
+def normalize_for_radar(df, metrics, player_row):
+    normed = pd.Series(index=metrics, dtype=float)
+    for m in metrics:
+        col = df[m]
+        mn, mx = col.min(), col.max()
+        if mx - mn == 0:
+            normed[m] = 0.5
+        else:
+            val = player_row[m]
+            normed[m] = (val - mn) / (mx - mn)
+        if m in NEGATIVE_METRICS:
+            normed[m] = 1.0 - normed[m]
+    return normed
+
+def build_radar_labels(metrics, player_row):
     labels = []
-    for m in radar_metrics:
+    for m in metrics:
         name = METRIC_NAMES_RU.get(m, m)
         val = player_row[m]
         if m.endswith('_pct') or m == 'pass_accuracy':
             detail = format_metric_with_detail(m, val, player_row)
-            labels.append(f"{name}\n{detail}")
+            labels.append(f"{name}<br>{detail}")
         else:
-            labels.append(f"{name}\n{val:.2f}")
-
-    player_vals = []
-    for m in radar_metrics:
-        max_val = df[m].max()
-        min_val = df[m].min()
-        if max_val - min_val == 0:
-            player_norm = 0.5
-        else:
-            player_norm = (player_row[m] - min_val) / (max_val - min_val)
-        if m in NEGATIVE_METRICS:
-            player_norm = 1.0 - player_norm
-        player_vals.append(player_norm)
-
-    angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
-    angles += angles[:1]
-    player_vals += player_vals[:1]
-
-    ax.fill(angles, player_vals, alpha=0.25, color=color)
-    ax.plot(angles, player_vals, color=color, linewidth=2, label=player_row['player'])
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels, fontsize=6)
-    ax.set_ylim(0, 1)
-    if show_legend:
-        ax.legend(loc='upper right', fontsize=6, bbox_to_anchor=(1.3, 1.1))
+            labels.append(f"{name}<br>{val:.2f}")
+    return labels
 
 def create_player_radar_figure(player_row, df, position_weights):
     pos = get_position_group(player_row['position'])
@@ -458,77 +452,80 @@ def create_player_radar_figure(player_row, df, position_weights):
     radar_metrics = [m for m, _ in sorted_metrics if m in df.columns][:8]
     if not radar_metrics:
         radar_metrics = [c for c in df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-    team_avg = {m: df[m].mean() for m in radar_metrics}
-    fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
-    plot_radar_on_axis(ax, player_row, team_avg, radar_metrics, df, show_legend=False)
-    plt.tight_layout(pad=0.2)
+
+    labels = build_radar_labels(radar_metrics, player_row)
+    values = normalize_for_radar(df, radar_metrics, player_row).tolist()
+
+    fig = go.Figure(data=go.Scatterpolar(
+        r=values + values[:1],
+        theta=labels + labels[:1],
+        fill='toself',
+        name=player_row['player'],
+        line_color='blue',
+    ))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
+        showlegend=True,
+        height=400,
+        width=400,
+        margin=dict(l=20, r=20, t=30, b=20),
+    )
     return fig
 
-def create_compare_figure(p1, p2, radar_metrics, df):
-    fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
-    labels = [METRIC_NAMES_RU.get(m, m) for m in radar_metrics]
-    vals1, vals2 = [], []
-    for m in radar_metrics:
-        max_v, min_v = df[m].max(), df[m].min()
-        if max_v - min_v == 0:
-            v1 = v2 = 0.5
-        else:
-            v1 = (p1[m] - min_v) / (max_v - min_v)
-            v2 = (p2[m] - min_v) / (max_v - min_v)
-        if m in NEGATIVE_METRICS:
-            v1, v2 = 1 - v1, 1 - v2
-        vals1.append(v1)
-        vals2.append(v2)
-    angles = np.linspace(0, 2*np.pi, len(labels), endpoint=False).tolist()
-    angles += angles[:1]
-    vals1 += vals1[:1]
-    vals2 += vals2[:1]
-    ax.fill(angles, vals1, alpha=0.2, color='blue')
-    ax.plot(angles, vals1, color='blue', linewidth=2, label=f'{p1["player"]} ({p1["rating"]:.1f})')
-    ax.fill(angles, vals2, alpha=0.2, color='red')
-    ax.plot(angles, vals2, color='red', linewidth=2, label=f'{p2["player"]} ({p2["rating"]:.1f})')
-    ax.set_xticks(angles[:-1])
-    ax.set_xticklabels(labels, fontsize=6)
-    ax.set_ylim(0,1)
-    ax.set_title('Сравнение лидеров', fontsize=10, weight='bold')
-    ax.legend(loc='upper right', fontsize=6, bbox_to_anchor=(1.3, 1.1))
-    plt.tight_layout()
+def create_compare_figure(p1, p2, radar_metrics, full_df):
+    labels = build_radar_labels(radar_metrics, p1)
+    vals1 = normalize_for_radar(full_df, radar_metrics, p1).tolist()
+    vals2 = normalize_for_radar(full_df, radar_metrics, p2).tolist()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=vals1 + vals1[:1],
+        theta=labels + labels[:1],
+        fill='toself',
+        name=f'{p1["player"]} ({p1["rating"]:.1f})',
+        line_color='blue',
+        opacity=0.6,
+    ))
+    fig.add_trace(go.Scatterpolar(
+        r=vals2 + vals2[:1],
+        theta=labels + labels[:1],
+        fill='toself',
+        name=f'{p2["player"]} ({p2["rating"]:.1f})',
+        line_color='red',
+        opacity=0.6,
+    ))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
+        showlegend=True,
+        height=400,
+        width=400,
+        margin=dict(l=20, r=20, t=30, b=20),
+        title="Сравнение игроков",
+    )
     return fig
 
-def create_position_radar(selected_players, df, pos_metrics, colors):
-    fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
-    for i, player_name in enumerate(selected_players):
-        player_row = df[df['player'] == player_name].iloc[0]
+def create_position_radar(players_data, full_df, pos_metrics, colors):
+    fig = go.Figure()
+    for i, player_row in enumerate(players_data):
+        labels = build_radar_labels(pos_metrics[:8], player_row)
+        values = normalize_for_radar(full_df, pos_metrics[:8], player_row).tolist()
         color = colors[i % len(colors)]
-        plot_radar_on_axis(ax, player_row, None, pos_metrics[:8], df, color=color, show_legend=False)
-
-    label_colors = []
-    for m in pos_metrics[:8]:
-        name = METRIC_NAMES_RU.get(m, m)
-        value_lines = []
-        for i, player_name in enumerate(selected_players):
-            player_row = df[df['player'] == player_name].iloc[0]
-            val = player_row[m]
-            if m.endswith('_pct') or m == 'pass_accuracy':
-                detail = format_metric_with_detail(m, val, player_row)
-            else:
-                detail = f"{val:.2f}"
-            value_lines.append(f"{player_name}: {detail}")
-        label_colors.append(f"{name}\n" + "\n".join(value_lines))
-
-    for i, m in enumerate(pos_metrics[:8]):
-        angle = 2*np.pi * i / len(pos_metrics[:8])
-        ax.text(angle, 1.35, label_colors[i], 
-                ha='center', va='center', fontsize=6, transform=ax.transData)
-
-    ax.set_xticks([])
-    ax.set_ylim(0, 1)
-
-    from matplotlib.lines import Line2D
-    legend_elements = [Line2D([0], [0], color=colors[i % len(colors)], lw=2, label=name) 
-                       for i, name in enumerate(selected_players)]
-    ax.legend(handles=legend_elements, loc='upper right', fontsize=6, bbox_to_anchor=(1.3, 1.1))
-
+        fig.add_trace(go.Scatterpolar(
+            r=values + values[:1],
+            theta=labels + labels[:1],
+            fill='toself',
+            name=player_row['player'],
+            line_color=color,
+            opacity=0.6,
+        ))
+    fig.update_layout(
+        polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
+        showlegend=True,
+        height=500,
+        width=600,
+        margin=dict(l=20, r=20, t=30, b=20),
+        title="Сравнение по позиции",
+    )
     return fig
 
 # -------------------- ЗАГРУЗКА ИЗ БД --------------------
@@ -571,10 +568,8 @@ def load_from_db(league_name, season, teams=None):
     df = pd.read_sql(query, conn, params=params)
     conn.close()
 
-    # Удаляем вратарей
     df = df[~df['position'].str.upper().str.contains('GK', na=False)]
 
-    # Проценты
     pct_cols = ['pass_accuracy', 'dribbles_success_pct', 'tackles_success_pct',
                 'crosses_accuracy', 'challenges_won_pct', 'air_challenges_won_pct',
                 'progressive_passes_accuracy', 'passes_final_third_accuracy']
@@ -584,7 +579,6 @@ def load_from_db(league_name, season, teams=None):
             if df[col].max() <= 1.0:
                 df[col] = df[col] * 100
 
-    # Нормализация на 90 минут
     minutes = pd.to_numeric(df['minutes'], errors='coerce').fillna(0)
     stats_to_norm = [
         'goals', 'assists', 'shots', 'shots_on_target', 'key_passes',
@@ -619,7 +613,6 @@ def get_leagues():
         conn.close()
         return leagues
     except Exception as e:
-        st.error(f"Не удалось подключиться к базе данных: {e}")
         return []
 
 @st.cache_data(ttl=60)
@@ -639,7 +632,7 @@ def get_seasons(league_name):
         cur.close()
         conn.close()
         return seasons
-    except Exception as e:
+    except:
         return []
 
 @st.cache_data(ttl=60)
@@ -659,7 +652,7 @@ def get_teams(league_name, season):
         cur.close()
         conn.close()
         return teams
-    except Exception as e:
+    except:
         return []
 
 # -------------------- ИНТЕРФЕЙС STREAMLIT --------------------
@@ -671,7 +664,7 @@ if 'df_excel' not in st.session_state:
 if 'df_db' not in st.session_state:
     st.session_state.df_db = None
 if 'active_df_type' not in st.session_state:
-    st.session_state.active_df_type = None  # 'excel' или 'db'
+    st.session_state.active_df_type = None
 if 'position_tables_excel' not in st.session_state:
     st.session_state.position_tables_excel = {}
 if 'position_tables_db' not in st.session_state:
@@ -683,7 +676,6 @@ if 'last_uploaded_name' not in st.session_state:
 if 'selected_main_metrics' not in st.session_state:
     st.session_state.selected_main_metrics = []
 
-# Боковая панель
 with st.sidebar:
     st.header("📂 Источник данных")
     data_source = st.radio("Загрузка", ["Excel файл", "База данных (Supabase)"], horizontal=True)
@@ -709,7 +701,7 @@ with st.sidebar:
                         st.session_state.last_uploaded_name = uploaded_file.name
                         st.success(f"Загружено {len(df_filtered)} игроков (исключено {excluded} с менее чем {MIN_MINUTES} мин.)")
 
-    else:  # База данных (Supabase)
+    else:  # База данных
         st.header("1. Выбор лиги, сезона и команд")
         leagues_list = get_leagues()
         if not leagues_list:
@@ -731,14 +723,11 @@ with st.sidebar:
         if league and season:
             teams_list = get_teams(league, season)
             if teams_list:
-                selected_teams = st.multiselect(
-                "Команды (оставьте пустым – все)", teams_list, key="teams_db"
-                )
+                selected_teams = st.multiselect("Команды (оставьте пустым – все)", teams_list, key="teams_db")
             else:
                 st.info("Нет команд для выбранной лиги и сезона.")
                 selected_teams = []
         else:
-            st.caption("Выберите лигу и сезон, чтобы появился фильтр по командам.")
             selected_teams = []
 
         if league and season:
@@ -761,13 +750,11 @@ with st.sidebar:
                     except Exception as e:
                         st.error(f"Ошибка: {e}")
 
-    # Выбор активного источника для таблиц
-    # Выбор активного источника для таблиц (безопасный)
+    # Выбор активного источника
     if st.session_state.df_excel is not None and st.session_state.df_db is not None:
-    # Доступны оба источника – показываем radio
         active = st.radio("Показать данные", ["Excel", "База данных"],
-                      index=0 if st.session_state.active_df_type == 'excel' else 1,
-                      key="active_view_v2")
+                          index=0 if st.session_state.active_df_type == 'excel' else 1,
+                          key="active_view_v2")
         st.session_state.active_df_type = 'excel' if active == "Excel" else 'db'
     elif st.session_state.df_excel is not None:
         st.session_state.active_df_type = 'excel'
@@ -775,11 +762,9 @@ with st.sidebar:
     elif st.session_state.df_db is not None:
         st.session_state.active_df_type = 'db'
         st.caption("Активные данные: База данных")
-    else:
-        st.session_state.active_df_type = None
 
-    # Общие настройки весов
-    st.header("3. Настройки весов")
+    # Настройки весов
+    st.header("2. Настройки весов")
     if st.button("Открыть редактор весов", use_container_width=True):
         st.session_state.show_weights_editor = True
     if st.button("Сбросить веса по умолчанию", use_container_width=True):
@@ -787,7 +772,6 @@ with st.sidebar:
         save_settings(st.session_state.current_settings)
         st.cache_data.clear()
         st.success("Веса сброшены.")
-        # Пересчитать, если есть данные
         for attr in ['df_excel', 'df_db']:
             df = getattr(st.session_state, attr)
             if df is not None:
@@ -797,11 +781,9 @@ with st.sidebar:
                 else:
                     st.session_state.position_tables_db = build_position_tables(df, st.session_state.current_settings)
 
-    # Визуализация (сравнение игроков) – доступна, если есть хотя бы один датафрейм
+    # Визуализация (сравнение)
     if st.session_state.df_excel is not None or st.session_state.df_db is not None:
-        st.header("4. Визуализация")
-
-        # Формируем общий список игроков с метками источника
+        st.header("3. Визуализация")
         all_players = []
         if st.session_state.df_excel is not None:
             for p in st.session_state.df_excel['player'].tolist():
@@ -817,7 +799,6 @@ with st.sidebar:
             if compare_player1_label == compare_player2_label:
                 st.warning("Выберите разных игроков.")
             else:
-                # Извлекаем имя и источник
                 def extract_player(label):
                     if label.endswith(" (Excel)"):
                         return label[:-7], st.session_state.df_excel
@@ -829,91 +810,67 @@ with st.sidebar:
                 if name1 and name2 and source1 is not None and source2 is not None:
                     p1 = source1[source1['player'] == name1].iloc[0]
                     p2 = source2[source2['player'] == name2].iloc[0]
-                    # Для сравнения создаём объединённый DataFrame из двух строк, чтобы нормализация работала корректно
-                    combined_df = pd.concat([p1.to_frame().T, p2.to_frame().T], ignore_index=True)
-                    pos1 = get_position_group(p1['position'])
-                    pos2 = get_position_group(p2['position'])
-                    metrics_set = set()
-                    for m in st.session_state.current_settings.get(pos1, {}) | st.session_state.current_settings.get(pos2, {}):
-                        if m in combined_df.columns:
-                            metrics_set.add(m)
-                    radar_metrics = list(metrics_set)[:8]
-                    if not radar_metrics:
-                        radar_metrics = [c for c in combined_df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-                    fig = create_compare_figure(p1, p2, radar_metrics, combined_df)
-                    st.pyplot(fig)
-                else:
-                    st.error("Не удалось найти игроков.")
+                    full_df = get_full_df()
+                    if full_df is None:
+                        st.error("Нет данных для нормализации.")
+                    else:
+                        pos1 = get_position_group(p1['position'])
+                        pos2 = get_position_group(p2['position'])
+                        metrics_set = set()
+                        for m in st.session_state.current_settings.get(pos1, {}) | st.session_state.current_settings.get(pos2, {}):
+                            if m in full_df.columns:
+                                metrics_set.add(m)
+                        radar_metrics = list(metrics_set)[:8]
+                        if not radar_metrics:
+                            radar_metrics = [c for c in full_df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                        fig = create_compare_figure(p1, p2, radar_metrics, full_df)
+                        st.plotly_chart(fig, use_container_width=True)
 
-       
-        
         st.subheader("Сравнение игроков одной позиции")
         position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp_v2")
-        
-        # Собираем игроков выбранной позиции из обоих источников
-        pos_players = []   # список кортежей (имя_игрока, источник: 'excel' или 'db')
+        pos_players = []
         if st.session_state.df_excel is not None:
-            df_excel_pos = st.session_state.df_excel[
-                st.session_state.df_excel['position'].map(get_position_group) == position_choice
-            ]
+            df_excel_pos = st.session_state.df_excel[st.session_state.df_excel['position'].map(get_position_group) == position_choice]
             for _, row in df_excel_pos.iterrows():
                 pos_players.append((row['player'], 'excel'))
-        
         if st.session_state.df_db is not None:
-            df_db_pos = st.session_state.df_db[
-                st.session_state.df_db['position'].map(get_position_group) == position_choice
-            ]
+            df_db_pos = st.session_state.df_db[st.session_state.df_db['position'].map(get_position_group) == position_choice]
             for _, row in df_db_pos.iterrows():
                 pos_players.append((row['player'], 'db'))
-        
-        # Формируем отображаемые метки с указанием источника
+
         display_labels = [f"{name} ({src.upper()})" for name, src in pos_players]
-        
         if not pos_players:
             st.info(f"Нет игроков позиции **{position_choice}**")
         else:
-            selected_labels = st.multiselect(
-                "Выберите до 6 игроков",
-                display_labels,
-                max_selections=6,
-                key="multi_players_pos_v2"
-            )
+            selected_labels = st.multiselect("Выберите до 6 игроков", display_labels, max_selections=6, key="multi_players_pos_v2")
             if st.button("Сравнить игроков позиции", use_container_width=True, key="btn_compare_pos_v2"):
                 if len(selected_labels) < 2:
                     st.warning("Выберите хотя бы двух игроков.")
                 else:
-                    # Восстанавливаем имена и источники по выбранным меткам
                     selected_entries = []
                     for label in selected_labels:
                         for name, src in pos_players:
                             if f"{name} ({src.upper()})" == label:
                                 selected_entries.append((name, src))
                                 break
-                    # Извлекаем строки из соответствующих датафреймов
                     players_data = []
                     for name, src in selected_entries:
                         source_df = st.session_state.df_excel if src == 'excel' else st.session_state.df_db
                         player_row = source_df[source_df['player'] == name].iloc[0]
                         players_data.append(player_row)
-        
-                    combined_df = pd.DataFrame(players_data)
-                    pos_metrics = [
-                        m for m, w in st.session_state.current_settings.get(position_choice, {}).items()
-                        if w != 0 and m in combined_df.columns
-                    ]
-                    if not pos_metrics:
-                        st.error("Для данной позиции не заданы метрики в выбранных данных.")
+                    full_df = get_full_df()
+                    if full_df is None:
+                        st.error("Нет данных для нормализации.")
                     else:
-                        colors = ['blue','red','green','orange','purple','brown']
-                        fig = create_position_radar(
-                            [p['player'] for p in players_data],
-                            combined_df,
-                            pos_metrics,
-                            colors
-                        )
-                        st.pyplot(fig)
+                        pos_metrics = [m for m, w in st.session_state.current_settings.get(position_choice, {}).items() if w != 0 and m in full_df.columns]
+                        if not pos_metrics:
+                            st.error("Для данной позиции не заданы метрики в выбранных данных.")
+                        else:
+                            colors = ['blue','red','green','orange','purple','brown']
+                            fig = create_position_radar(players_data, full_df, pos_metrics, colors)
+                            st.plotly_chart(fig, use_container_width=True)
 
-# Основная область – работает с активным DataFrame
+# Основная область
 if st.session_state.active_df_type == 'excel':
     df_active = st.session_state.df_excel
     position_tables_active = st.session_state.position_tables_excel
@@ -944,16 +901,7 @@ if df_active is not None:
 
     with tabs[0]:
         df_main = build_main_table(df_active, selected_metrics)
-
-        st.dataframe(
-            df_main,
-            height=600,
-            use_container_width=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            key="main_table",
-        )
-
+        st.dataframe(df_main, height=600, use_container_width=True, on_select="rerun", selection_mode="single-row", key="main_table")
         if "main_table" in st.session_state and st.session_state.main_table.selection.rows:
             idx = next(iter(st.session_state.main_table.selection.rows))
             if idx < len(df_active):
@@ -961,7 +909,7 @@ if df_active is not None:
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
                     fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings)
-                    st.pyplot(fig)
+                    st.plotly_chart(fig, use_container_width=True)
 
     for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
         with tabs[i]:
@@ -969,14 +917,7 @@ if df_active is not None:
             if rows:
                 numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
                 df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
-                st.dataframe(
-                    df_pos,
-                    height=400,
-                    use_container_width=True,
-                    on_select="rerun",
-                    selection_mode="single-row",
-                    key=f"table_{pos}",
-                )
+                st.dataframe(df_pos, height=400, use_container_width=True, on_select="rerun", selection_mode="single-row", key=f"table_{pos}")
                 state_key = f"table_{pos}"
                 if state_key in st.session_state and st.session_state[state_key].selection.rows:
                     idx = next(iter(st.session_state[state_key].selection.rows))
@@ -989,7 +930,7 @@ if df_active is not None:
                             col1, col2, col3 = st.columns([1, 2, 1])
                             with col2:
                                 fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings)
-                                st.pyplot(fig)
+                                st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info(f"Нет игроков позиции {pos}")
 
@@ -1014,14 +955,9 @@ if df_active is not None:
                                           mid_type='percentile', mid_value=50, mid_color='FFFFEB',
                                           end_type='max', end_color='C6EFCE')
                         )
-        st.download_button(
-            label="Скачать Excel",
-            data=output.getvalue(),
-            file_name="players_rating.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        st.download_button(label="Скачать Excel", data=output.getvalue(), file_name="players_rating.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-# Редактор весов (общий)
+# Редактор весов
 if st.session_state.get('show_weights_editor'):
     with st.expander("Редактор весов метрик", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
