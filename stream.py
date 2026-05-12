@@ -625,7 +625,7 @@ def create_player_radar_figure(player_row, df, position_weights, avg_values=None
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
         height=450, width=450,
-        margin=dict(l=40, r=40, t=40, b=40),
+        margin=dict(l=120, r=120, t=120, b=120),
     )
     return fig
 
@@ -658,7 +658,7 @@ def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
         height=500, width=500,
-        margin=dict(l=60, r=60, t=60, b=60),
+        margin=dict(l=120, r=120, t=120, b=120),
         title="Сравнение игроков",
     )
     return fig
@@ -685,7 +685,7 @@ def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
         height=800, width=750,
-        margin=dict(l=80, r=80, t=60, b=80),
+        margin=dict(l=120, r=120, t=120, b=120),
         title="Сравнение по позиции",
     )
     return fig
