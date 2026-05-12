@@ -705,8 +705,15 @@ with st.sidebar:
 
         if league and season:
             teams_list = get_teams(league, season)
-            selected_teams = st.multiselect("Команды (оставьте пустым – все)", teams_list, key="teams_db")
+            if teams_list:
+                selected_teams = st.multiselect(
+                "Команды (оставьте пустым – все)", teams_list, key="teams_db"
+                )
+            else:
+                st.info("Нет команд для выбранной лиги и сезона.")
+                selected_teams = []
         else:
+            st.caption("Выберите лигу и сезон, чтобы появился фильтр по командам.")
             selected_teams = []
 
         if league and season:
