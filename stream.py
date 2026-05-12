@@ -410,7 +410,7 @@ def build_main_table(df, selected_metrics):
     return pd.DataFrame(main_data, columns=main_headers)
 
 # -------------------- ЗАГРУЗКА ИЗ БД --------------------
-def load_from_db(league_name, season, teams=None):
+def load_from_db(league_names, seasons, teams=None):
     conn = psycopg2.connect(**get_db_config())
     query = """
     SELECT 
@@ -435,14 +435,14 @@ def load_from_db(league_name, season, teams=None):
         ps.red_cards, ps.mistakes_goals, ps.mistakes_chances,
         ps.fouls, ps.actions_unsuccessful, ps.actions,
         ps.matches_played, ps.starting_lineup,
-        t.name AS team
+        t.name AS team, l.name AS league
     FROM player_stats ps
     JOIN players p ON ps.player_id = p.id
     JOIN teams t ON ps.team_id = t.id
     JOIN leagues l ON t.league_id = l.id
-    WHERE l.name = %s AND ps.season = %s
+    WHERE l.name = ANY(%s) AND ps.season = ANY(%s)
     """
-    params = [league_name, season]
+    params = [league_names, seasons]
     if teams and len(teams) > 0:
         query += " AND t.name = ANY(%s)"
         params.append(teams)
@@ -482,7 +482,7 @@ def load_from_db(league_name, season, teams=None):
 
     return df
 
-# -------------------- ДИНАМИЧЕСКАЯ ЗАГРУЗКА ЛИГ, СЕЗОНОВ, КОМАНД --------------------
+# -------------------- ДИНАМИЧЕСКАЯ ЗАГРУЗКА СПИСКОВ --------------------
 @st.cache_data(ttl=60)
 def get_leagues():
     try:
@@ -497,7 +497,9 @@ def get_leagues():
         return []
 
 @st.cache_data(ttl=60)
-def get_seasons(league_name):
+def get_seasons_for_leagues(league_names):
+    if not league_names:
+        return []
     try:
         conn = psycopg2.connect(**get_db_config())
         cur = conn.cursor()
@@ -506,9 +508,9 @@ def get_seasons(league_name):
             FROM player_stats ps
             JOIN teams t ON ps.team_id = t.id
             JOIN leagues l ON t.league_id = l.id
-            WHERE l.name = %s
+            WHERE l.name = ANY(%s)
             ORDER BY ps.season
-        """, (league_name,))
+        """, (league_names,))
         seasons = [row[0] for row in cur.fetchall()]
         cur.close()
         conn.close()
@@ -517,7 +519,9 @@ def get_seasons(league_name):
         return []
 
 @st.cache_data(ttl=60)
-def get_teams(league_name, season):
+def get_teams_for_leagues_seasons(league_names, seasons):
+    if not league_names or not seasons:
+        return []
     try:
         conn = psycopg2.connect(**get_db_config())
         cur = conn.cursor()
@@ -526,9 +530,9 @@ def get_teams(league_name, season):
             FROM teams t
             JOIN player_stats ps ON t.id = ps.team_id
             JOIN leagues l ON t.league_id = l.id
-            WHERE l.name = %s AND ps.season = %s
+            WHERE l.name = ANY(%s) AND ps.season = ANY(%s)
             ORDER BY t.name
-        """, (league_name, season))
+        """, (league_names, seasons))
         teams = [row[0] for row in cur.fetchall()]
         cur.close()
         conn.close()
@@ -573,12 +577,11 @@ def build_radar_labels(metrics, players, avg_series=None):
             lines.append(f"{p['player']}: {detail}")
         if avg_series is not None and m in avg_series:
             avg_val = avg_series[m]
-            if pd.notna(avg_val):
-                if m.endswith('_pct') or m == 'pass_accuracy':
-                    avg_detail = f"{avg_val:.1f}%"
-                else:
-                    avg_detail = f"{avg_val:.2f}"
-                lines.append(f"Средние: {avg_detail}")
+            if m.endswith('_pct') or m == 'pass_accuracy':
+                avg_detail = f"{avg_val:.2f}%"
+            else:
+                avg_detail = f"{avg_val:.2f}"
+            lines.append(f"Средние: {avg_detail}")
         labels.append("<br>".join(lines))
     return labels
 
@@ -622,7 +625,7 @@ def create_player_radar_figure(player_row, df, position_weights, avg_values=None
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
         height=450, width=450,
-        margin=dict(l=120, r=120, t=120, b=120),
+        margin=dict(l=40, r=40, t=40, b=40),
     )
     return fig
 
@@ -655,7 +658,7 @@ def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
         height=500, width=500,
-        margin=dict(l=120, r=120, t=90, b=120),
+        margin=dict(l=60, r=60, t=60, b=60),
         title="Сравнение игроков",
     )
     return fig
@@ -682,7 +685,7 @@ def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
         height=800, width=750,
-        margin=dict(l=120, r=120, t=90, b=120),
+        margin=dict(l=80, r=80, t=60, b=80),
         title="Сравнение по позиции",
     )
     return fig
@@ -696,7 +699,7 @@ def get_average_series(radar_metrics, full_df):
         league = st.session_state.get('avg_league')
         season = st.session_state.get('avg_season')
         if league and season:
-            df_league = load_from_db(league, season)
+            df_league = load_from_db([league], [season])
             if df_league is not None and not df_league.empty:
                 df_league = df_league[df_league['minutes'] >= MIN_MINUTES]
                 if not df_league.empty:
@@ -757,40 +760,40 @@ with st.sidebar:
                         st.success(f"Загружено {len(df_filtered)} игроков (исключено {excluded} с менее чем {MIN_MINUTES} мин.)")
 
     else:  # База данных
-        st.header("1. Выбор лиги, сезона и команд")
+        st.header("1. Выбор лиг, сезонов и команд")
         leagues_list = get_leagues()
         if not leagues_list:
             st.warning("Нет доступных лиг в базе данных или ошибка подключения.")
-            league = None
+            selected_leagues = []
         else:
-            league = st.selectbox("Лига", leagues_list, key="league_db")
+            selected_leagues = st.multiselect("Лиги", leagues_list, key="league_db")
 
-        if league:
-            seasons_list = get_seasons(league)
+        if selected_leagues:
+            seasons_list = get_seasons_for_leagues(selected_leagues)
             if not seasons_list:
-                st.warning(f"Для лиги '{league}' нет данных по сезонам.")
-                season = None
+                st.warning("Для выбранных лиг нет данных.")
+                selected_seasons = []
             else:
-                season = st.selectbox("Сезон", seasons_list, key="season_db")
+                selected_seasons = st.multiselect("Сезоны", seasons_list, key="season_db")
         else:
-            season = None
+            selected_seasons = []
 
-        if league and season:
-            teams_list = get_teams(league, season)
+        if selected_leagues and selected_seasons:
+            teams_list = get_teams_for_leagues_seasons(selected_leagues, selected_seasons)
             if teams_list:
                 selected_teams = st.multiselect("Команды (оставьте пустым – все)", teams_list, key="teams_db")
             else:
-                st.info("Нет команд для выбранной лиги и сезона.")
+                st.info("Нет команд для выбранных лиг и сезонов.")
                 selected_teams = []
         else:
             selected_teams = []
 
-        if league and season:
+        if selected_leagues and selected_seasons:
             if st.button("Загрузить данные", use_container_width=True):
                 with st.spinner("Запрос к Supabase..."):
                     try:
                         teams_param = None if len(selected_teams) == 0 else selected_teams
-                        df_raw = load_from_db(league, season, teams_param)
+                        df_raw = load_from_db(selected_leagues, selected_seasons, teams_param)
                         total = len(df_raw)
                         df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
                         if len(df_filtered) == 0:
@@ -844,7 +847,7 @@ with st.sidebar:
     if avg_source == "Лига из БД":
         avg_league = st.selectbox("Лига для средних", get_leagues(), key="avg_league")
         if avg_league:
-            avg_season = st.selectbox("Сезон для средних", get_seasons(avg_league), key="avg_season")
+            avg_season = st.selectbox("Сезон для средних", get_seasons_for_leagues([avg_league]), key="avg_season")
         else:
             avg_season = None
     else:
@@ -897,7 +900,7 @@ with st.sidebar:
                         fig = create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=avg_series)
                         st.plotly_chart(fig, use_container_width=True)
 
-        # Интерфейс для сравнения по позиции (кнопка и мультиселект)
+        # Интерфейс для сравнения по позиции
         st.subheader("Сравнение игроков одной позиции")
         position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp_v2")
         pos_players = []
