@@ -9,11 +9,15 @@ import os
 import pickle
 from pathlib import Path
 import warnings
+import psycopg2
+from dotenv import load_dotenv
+
 warnings.filterwarnings('ignore')
+load_dotenv()
 
 # -------------------- ГЛОБАЛЬНЫЕ КОНСТАНТЫ --------------------
 MIN_MINUTES = 90
-TOP_N_FOR_PLOTS = 8   # максимум игроков на одном радаре
+TOP_N_FOR_PLOTS = 8
 SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_settings.pkl')
 
 ALL_POSSIBLE_METRICS = [
@@ -116,7 +120,16 @@ METRIC_NAMES_RU = {
     'actions_unsuccessful_p90': 'Неуспешные действия',
 }
 
-# -------------------- ФУНКЦИИ АНАЛИЗА --------------------
+# -------------------- ПАРАМЕТРЫ ПОДКЛЮЧЕНИЯ К БД --------------------
+DB_CONFIG = {
+    "host": os.getenv("SUPABASE_HOST", "aws-1-eu-north-1.pooler.supabase.com"),
+    "port": os.getenv("SUPABASE_PORT", "5432"),
+    "dbname": os.getenv("SUPABASE_DBNAME", "postgres"),
+    "user": os.getenv("SUPABASE_USER", "postgres.nxnupydntfmhutklslhm"),
+    "password": os.getenv("SUPABASE_PASSWORD", "Vegas54325522"),
+}
+
+# -------------------- ФУНКЦИИ АНАЛИЗА (без изменений) --------------------
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -307,7 +320,6 @@ def build_position_tables(df, position_weights):
             tables[pos] = ([], [])
             continue
 
-        # Нормализуем метрики внутри позиции
         for m in metrics:
             col = pos_df[m]
             min_val, max_val = col.min(), col.max()
@@ -318,7 +330,6 @@ def build_position_tables(df, position_weights):
             if m in NEGATIVE_METRICS:
                 pos_df[f'{m}_norm_pos'] = 1.0 - pos_df[f'{m}_norm_pos']
 
-        # Определяем для каждой метрики максимальное и минимальное нормализованное значение среди игроков этой позиции
         max_vals = {m: pos_df[f'{m}_norm_pos'].max() for m in metrics}
         min_vals = {m: pos_df[f'{m}_norm_pos'].min() for m in metrics}
 
@@ -331,13 +342,10 @@ def build_position_tables(df, position_weights):
                 norm_val = player_row[f'{m}_norm_pos']
                 is_max = (norm_val == max_vals[m])
                 is_min = (norm_val == min_vals[m])
-
-                # Подсвечиваем, только если игрок одновременно не является и лучшим, и худшим (все значения одинаковы)
                 if is_max and not is_min:
                     formatted = f"🟢 {formatted}"
                 elif is_min and not is_max:
                     formatted = f"🔴 {formatted}"
-
                 row_data.append(formatted)
             rows.append(row_data)
 
@@ -346,12 +354,10 @@ def build_position_tables(df, position_weights):
     return tables
 
 def build_main_table(df, selected_metrics):
-    """Формирует общую таблицу с подсветкой лучших/худших метрик (нормализация по всем)."""
     metrics = [m for m in selected_metrics if m in df.columns]
     if not metrics:
         return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
 
-    # Нормализация по всей команде (или по всем игрокам)
     norm_cols = {}
     for m in metrics:
         col = df[m]
@@ -384,7 +390,7 @@ def build_main_table(df, selected_metrics):
         main_data.append(row_data)
     return pd.DataFrame(main_data, columns=main_headers)
 
-# -------------------- ВИЗУАЛИЗАЦИЯ --------------------
+# -------------------- ВИЗУАЛИЗАЦИЯ (без изменений) --------------------
 def plot_radar_on_axis(ax, player_row, team_avg, radar_metrics, df, title=None, color='blue', show_legend=True):
     labels = []
     for m in radar_metrics:
@@ -486,20 +492,15 @@ def create_compare_figure(p1, p2, radar_metrics, df):
     return fig
 
 def create_position_radar(selected_players, df, pos_metrics, colors):
-    """Радар для нескольких игроков одной позиции с цветными подписями."""
     fig, ax = plt.subplots(figsize=(6, 6), subplot_kw=dict(polar=True))
-
-    # Собираем все значения для каждого игрока
     for i, player_name in enumerate(selected_players):
         player_row = df[df['player'] == player_name].iloc[0]
         color = colors[i % len(colors)]
         plot_radar_on_axis(ax, player_row, None, pos_metrics[:8], df, color=color, show_legend=False)
 
-    # Формируем цветные подписи для метрик
     label_colors = []
     for m in pos_metrics[:8]:
         name = METRIC_NAMES_RU.get(m, m)
-        # Собираем строки значений от каждого игрока
         value_lines = []
         for i, player_name in enumerate(selected_players):
             player_row = df[df['player'] == player_name].iloc[0]
@@ -509,27 +510,94 @@ def create_position_radar(selected_players, df, pos_metrics, colors):
             else:
                 detail = f"{val:.2f}"
             value_lines.append(f"{player_name}: {detail}")
-        # Склеиваем имя метрики и все значения, разделяя переносами
         label_colors.append(f"{name}\n" + "\n".join(value_lines))
 
-    # Задаём подписи с цветами: не совсем просто из-за особенностей matplotlib, 
-    # поэтому создадим дополнительный Text для каждого лейбла
     for i, m in enumerate(pos_metrics[:8]):
         angle = 2*np.pi * i / len(pos_metrics[:8])
         ax.text(angle, 1.35, label_colors[i], 
                 ha='center', va='center', fontsize=6, transform=ax.transData)
 
-    # Убираем стандартные xticklabels
     ax.set_xticks([])
     ax.set_ylim(0, 1)
 
-    # Легенда с именами игроков
     from matplotlib.lines import Line2D
     legend_elements = [Line2D([0], [0], color=colors[i % len(colors)], lw=2, label=name) 
                        for i, name in enumerate(selected_players)]
     ax.legend(handles=legend_elements, loc='upper right', fontsize=6, bbox_to_anchor=(1.3, 1.1))
 
     return fig
+
+# -------------------- ЗАГРУЗКА ИЗ БД --------------------
+def load_from_db(league_name, season):
+    conn = psycopg2.connect(**DB_CONFIG)
+    query = """
+    SELECT 
+        p.name AS player, p.position,
+        ps.minutes_played AS minutes,
+        ps.goals, ps.assists, ps.shots, ps.shots_on_target,
+        ps.key_passes, ps.dribbles, ps.dribbles_success_pct,
+        ps.tackles, ps.tackles_success_pct, ps.interceptions,
+        ps.pass_accuracy, ps.passes, ps.crosses, ps.crosses_accuracy,
+        ps.xG, ps.challenges, ps.challenges_won_pct,
+        ps.air_challenges, ps.air_challenges_won_pct,
+        ps.fouls_suffered, ps.progressive_passes,
+        ps.progressive_passes_accuracy, ps.passes_final_third,
+        ps.passes_final_third_accuracy, ps.chances,
+        ps.chances_successful, ps.involvement_scoring,
+        ps.actions_opp_box, ps.actions_opp_box_success,
+        ps.final_third_entries, ps.final_third_carry,
+        ps.ball_recoveries, ps.ball_recoveries_opp_half,
+        ps.loose_ball_recoveries, ps.actions_successful,
+        ps.lost_balls, ps.lost_balls_own_half,
+        ps.individual_ball_losses, ps.yellow_cards,
+        ps.red_cards, ps.mistakes_goals, ps.mistakes_chances,
+        ps.fouls, ps.actions_unsuccessful, ps.actions,
+        ps.matches_played, ps.starting_lineup,
+        t.name AS team
+    FROM player_stats ps
+    JOIN players p ON ps.player_id = p.id
+    JOIN teams t ON ps.team_id = t.id
+    JOIN leagues l ON t.league_id = l.id
+    WHERE l.name = %s AND ps.season = %s
+    """
+    df = pd.read_sql(query, conn, params=[league_name, season])
+    conn.close()
+
+    # Удаляем вратарей
+    df = df[~df['position'].str.upper().str.contains('GK', na=False)]
+
+    # Проценты
+    pct_cols = ['pass_accuracy', 'dribbles_success_pct', 'tackles_success_pct',
+                'crosses_accuracy', 'challenges_won_pct', 'air_challenges_won_pct',
+                'progressive_passes_accuracy', 'passes_final_third_accuracy']
+    for col in pct_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            if df[col].max() <= 1.0:
+                df[col] = df[col] * 100
+
+    # Нормализация на 90 минут
+    minutes = pd.to_numeric(df['minutes'], errors='coerce').fillna(0)
+    stats_to_norm = [
+        'goals', 'assists', 'shots', 'shots_on_target', 'key_passes',
+        'dribbles', 'tackles', 'interceptions', 'challenges',
+        'air_challenges', 'crosses', 'progressive_passes', 'passes_final_third',
+        'chances', 'chances_successful', 'involvement_scoring',
+        'actions_opp_box', 'actions_opp_box_success',
+        'final_third_entries', 'final_third_carry',
+        'lost_balls', 'lost_balls_own_half', 'individual_ball_losses',
+        'ball_recoveries', 'ball_recoveries_opp_half',
+        'loose_ball_recoveries', 'fouls', 'fouls_suffered',
+        'yellow_cards', 'red_cards', 'mistakes_goals', 'mistakes_chances',
+        'actions', 'actions_successful', 'actions_unsuccessful',
+        'passes', 'xG'
+    ]
+    for col in stats_to_norm:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            df[f'{col}_p90'] = np.where(minutes > 0, (df[col] / minutes) * 90, 0)
+
+    return df
 
 # -------------------- ИНТЕРФЕЙС STREAMLIT --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
@@ -548,91 +616,181 @@ if 'selected_main_metrics' not in st.session_state:
 
 # Боковая панель
 with st.sidebar:
-    st.header("1. Загрузка данных")
-    uploaded_file = st.file_uploader("Выберите Excel-файл", type="xlsx", key="file_uploader")
-    if uploaded_file is not None:
-        if uploaded_file.name != st.session_state.last_uploaded_name:
-            with st.spinner("Анализируем файл..."):
-                df_raw = load_and_clean_data(uploaded_file.getvalue())
-                total = len(df_raw)
-                df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
-                excluded = total - len(df_filtered)
-                if len(df_filtered) == 0:
-                    st.error("Нет игроков с достаточным временем.")
-                else:
-                    df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
-                    df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
-                    st.session_state.df = df_filtered
-                    st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
-                    st.session_state.last_uploaded_name = uploaded_file.name
-                    st.success(f"Загружено {len(df_filtered)} игроков (исключено {excluded} с менее чем {MIN_MINUTES} мин.)")
+    st.header("📂 Источник данных")
+    data_source = st.radio("Выберите источник", ["Excel файл", "База данных (Supabase)"], 
+                           horizontal=True)
 
-    st.header("2. Настройки весов")
-    if st.button("Открыть редактор весов", use_container_width=True):
-        st.session_state.show_weights_editor = True
-    if st.button("Сбросить веса по умолчанию", use_container_width=True):
-        st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
-        save_settings(st.session_state.current_settings)
-        st.cache_data.clear()
-        st.success("Веса сброшены.")
-        if st.session_state.df is not None:
-            st.session_state.df = calculate_ratings(st.session_state.df, st.session_state.current_settings)
-            st.session_state.position_tables = build_position_tables(st.session_state.df, st.session_state.current_settings)
-
-    if st.session_state.df is not None:
-        st.header("3. Визуализация")
-        st.subheader("Сравнение двух игроков")
-        compare_player1 = st.selectbox("Игрок 1", st.session_state.df['player'].tolist(), key="cp1")
-        compare_player2 = st.selectbox("Игрок 2", st.session_state.df['player'].tolist(), key="cp2")
-        if st.button("Сравнить выбранных", use_container_width=True):
-            if compare_player1 == compare_player2:
-                st.warning("Выберите разных игроков.")
-            else:
-                p1 = st.session_state.df[st.session_state.df['player'] == compare_player1].iloc[0]
-                p2 = st.session_state.df[st.session_state.df['player'] == compare_player2].iloc[0]
-                pos1 = get_position_group(p1['position'])
-                pos2 = get_position_group(p2['position'])
-                metrics_set = set()
-                for m in st.session_state.current_settings.get(pos1, {}) | st.session_state.current_settings.get(pos2, {}):
-                    if m in st.session_state.df.columns:
-                        metrics_set.add(m)
-                radar_metrics = list(metrics_set)[:8]
-                if not radar_metrics:
-                    radar_metrics = [c for c in st.session_state.df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-                fig = create_compare_figure(p1, p2, radar_metrics, st.session_state.df)
-                st.pyplot(fig)
-
-        st.subheader("Сравнение игроков одной позиции")
-        position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp")
-        players_in_pos = st.session_state.df[st.session_state.df['position'].map(get_position_group) == position_choice]['player'].tolist()
-        if not players_in_pos:
-            st.info(f"Нет игроков позиции **{position_choice}**")
-        else:
-            selected_players = st.multiselect(
-                "Выберите до 6 игроков",
-                players_in_pos,
-                max_selections=6,
-                key="multi_players_pos"
-            )
-            if st.button("Сравнить игроков позиции", use_container_width=True, key="btn_compare_pos"):
-                if len(selected_players) < 2:
-                    st.warning("Выберите хотя бы двух игроков.")
-                elif len(selected_players) > 6:
-                    st.warning("Максимум 6 игроков.")
-                else:
-                    pos_metrics = [m for m, w in st.session_state.current_settings.get(position_choice, {}).items() if w != 0 and m in st.session_state.df.columns]
-                    if not pos_metrics:
-                        st.error("Для данной позиции не заданы метрики.")
+    if data_source == "Excel файл":
+        st.header("1. Загрузка данных")
+        uploaded_file = st.file_uploader("Выберите Excel-файл", type="xlsx", key="file_uploader")
+        if uploaded_file is not None:
+            if uploaded_file.name != st.session_state.last_uploaded_name:
+                with st.spinner("Анализируем файл..."):
+                    df_raw = load_and_clean_data(uploaded_file.getvalue())
+                    total = len(df_raw)
+                    df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
+                    excluded = total - len(df_filtered)
+                    if len(df_filtered) == 0:
+                        st.error("Нет игроков с достаточным временем.")
                     else:
-                        colors = ['blue','red','green','orange','purple','brown']
-                        fig = create_position_radar(selected_players, st.session_state.df, pos_metrics, colors)
-                        st.pyplot(fig)
-    else:
-        st.info("Загрузите Excel-файл, чтобы активировать визуализацию.")
+                        df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
+                        df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
+                        st.session_state.df = df_filtered
+                        st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
+                        st.session_state.last_uploaded_name = uploaded_file.name
+                        st.success(f"Загружено {len(df_filtered)} игроков (исключено {excluded} с менее чем {MIN_MINUTES} мин.)")
+
+        st.header("2. Настройки весов")
+        if st.button("Открыть редактор весов", use_container_width=True):
+            st.session_state.show_weights_editor = True
+        if st.button("Сбросить веса по умолчанию", use_container_width=True):
+            st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
+            save_settings(st.session_state.current_settings)
+            st.cache_data.clear()
+            st.success("Веса сброшены.")
+            if st.session_state.df is not None:
+                st.session_state.df = calculate_ratings(st.session_state.df, st.session_state.current_settings)
+                st.session_state.position_tables = build_position_tables(st.session_state.df, st.session_state.current_settings)
+
+        if st.session_state.df is not None:
+            st.header("3. Визуализация")
+            st.subheader("Сравнение двух игроков")
+            compare_player1 = st.selectbox("Игрок 1", st.session_state.df['player'].tolist(), key="cp1")
+            compare_player2 = st.selectbox("Игрок 2", st.session_state.df['player'].tolist(), key="cp2")
+            if st.button("Сравнить выбранных", use_container_width=True):
+                if compare_player1 == compare_player2:
+                    st.warning("Выберите разных игроков.")
+                else:
+                    p1 = st.session_state.df[st.session_state.df['player'] == compare_player1].iloc[0]
+                    p2 = st.session_state.df[st.session_state.df['player'] == compare_player2].iloc[0]
+                    pos1 = get_position_group(p1['position'])
+                    pos2 = get_position_group(p2['position'])
+                    metrics_set = set()
+                    for m in st.session_state.current_settings.get(pos1, {}) | st.session_state.current_settings.get(pos2, {}):
+                        if m in st.session_state.df.columns:
+                            metrics_set.add(m)
+                    radar_metrics = list(metrics_set)[:8]
+                    if not radar_metrics:
+                        radar_metrics = [c for c in st.session_state.df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                    fig = create_compare_figure(p1, p2, radar_metrics, st.session_state.df)
+                    st.pyplot(fig)
+
+            st.subheader("Сравнение игроков одной позиции")
+            position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp")
+            players_in_pos = st.session_state.df[st.session_state.df['position'].map(get_position_group) == position_choice]['player'].tolist()
+            if not players_in_pos:
+                st.info(f"Нет игроков позиции **{position_choice}**")
+            else:
+                selected_players = st.multiselect(
+                    "Выберите до 6 игроков",
+                    players_in_pos,
+                    max_selections=6,
+                    key="multi_players_pos"
+                )
+                if st.button("Сравнить игроков позиции", use_container_width=True, key="btn_compare_pos"):
+                    if len(selected_players) < 2:
+                        st.warning("Выберите хотя бы двух игроков.")
+                    elif len(selected_players) > 6:
+                        st.warning("Максимум 6 игроков.")
+                    else:
+                        pos_metrics = [m for m, w in st.session_state.current_settings.get(position_choice, {}).items() if w != 0 and m in st.session_state.df.columns]
+                        if not pos_metrics:
+                            st.error("Для данной позиции не заданы метрики.")
+                        else:
+                            colors = ['blue','red','green','orange','purple','brown']
+                            fig = create_position_radar(selected_players, st.session_state.df, pos_metrics, colors)
+                            st.pyplot(fig)
+        else:
+            st.info("Загрузите Excel-файл, чтобы активировать визуализацию.")
+
+    else:  # База данных (Supabase)
+        st.header("1. Подключение к БД")
+        st.caption("Используются параметры из файла .env")
+        # Можно динамически загрузить список лиг, но пока статика
+        league = st.selectbox("Лига", ["English Premier League", "French Ligue 1"])
+        season = st.selectbox("Сезон", ["2024/2025"])
+        if st.button("Загрузить данные", use_container_width=True):
+            with st.spinner("Запрос к Supabase..."):
+                try:
+                    df_raw = load_from_db(league, season)
+                    total = len(df_raw)
+                    df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
+                    if len(df_filtered) == 0:
+                        st.error("Нет игроков с достаточным игровым временем.")
+                    else:
+                        df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
+                        df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
+                        st.session_state.df = df_filtered
+                        st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
+                        st.success(f"Загружено {len(df_filtered)} игроков (исключено {total - len(df_filtered)} с < {MIN_MINUTES} мин.)")
+                except Exception as e:
+                    st.error(f"Ошибка: {e}")
+
+        if st.session_state.df is not None:
+            st.header("2. Настройки весов")
+            if st.button("Открыть редактор весов", use_container_width=True):
+                st.session_state.show_weights_editor = True
+            if st.button("Сбросить веса по умолчанию", use_container_width=True):
+                st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
+                save_settings(st.session_state.current_settings)
+                st.cache_data.clear()
+                st.success("Веса сброшены.")
+                if st.session_state.df is not None:
+                    st.session_state.df = calculate_ratings(st.session_state.df, st.session_state.current_settings)
+                    st.session_state.position_tables = build_position_tables(st.session_state.df, st.session_state.current_settings)
+
+            st.header("3. Визуализация")
+            st.subheader("Сравнение двух игроков")
+            compare_player1 = st.selectbox("Игрок 1", st.session_state.df['player'].tolist(), key="cp1_db")
+            compare_player2 = st.selectbox("Игрок 2", st.session_state.df['player'].tolist(), key="cp2_db")
+            if st.button("Сравнить выбранных", use_container_width=True, key="compare_btn_db"):
+                if compare_player1 == compare_player2:
+                    st.warning("Выберите разных игроков.")
+                else:
+                    p1 = st.session_state.df[st.session_state.df['player'] == compare_player1].iloc[0]
+                    p2 = st.session_state.df[st.session_state.df['player'] == compare_player2].iloc[0]
+                    pos1 = get_position_group(p1['position'])
+                    pos2 = get_position_group(p2['position'])
+                    metrics_set = set()
+                    for m in st.session_state.current_settings.get(pos1, {}) | st.session_state.current_settings.get(pos2, {}):
+                        if m in st.session_state.df.columns:
+                            metrics_set.add(m)
+                    radar_metrics = list(metrics_set)[:8]
+                    if not radar_metrics:
+                        radar_metrics = [c for c in st.session_state.df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                    fig = create_compare_figure(p1, p2, radar_metrics, st.session_state.df)
+                    st.pyplot(fig)
+
+            st.subheader("Сравнение игроков одной позиции")
+            position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp_db")
+            players_in_pos = st.session_state.df[st.session_state.df['position'].map(get_position_group) == position_choice]['player'].tolist()
+            if not players_in_pos:
+                st.info(f"Нет игроков позиции **{position_choice}**")
+            else:
+                selected_players = st.multiselect(
+                    "Выберите до 6 игроков",
+                    players_in_pos,
+                    max_selections=6,
+                    key="multi_players_pos_db"
+                )
+                if st.button("Сравнить игроков позиции", use_container_width=True, key="btn_compare_pos_db"):
+                    if len(selected_players) < 2:
+                        st.warning("Выберите хотя бы двух игроков.")
+                    elif len(selected_players) > 6:
+                        st.warning("Максимум 6 игроков.")
+                    else:
+                        pos_metrics = [m for m, w in st.session_state.current_settings.get(position_choice, {}).items() if w != 0 and m in st.session_state.df.columns]
+                        if not pos_metrics:
+                            st.error("Для данной позиции не заданы метрики.")
+                        else:
+                            colors = ['blue','red','green','orange','purple','brown']
+                            fig = create_position_radar(selected_players, st.session_state.df, pos_metrics, colors)
+                            st.pyplot(fig)
+        else:
+            st.info("Загрузите данные из БД, чтобы активировать визуализацию.")
 
 # Основная область
 if st.session_state.df is not None:
-    # Настройка колонок общей таблицы
     all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in st.session_state.df.columns]
     metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in all_metrics}
     with st.expander("Настройка колонок общей таблицы"):
@@ -651,7 +809,6 @@ if st.session_state.df is not None:
     tabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
 
     with tabs[0]:
-        # Используем новую функцию с подсветкой
         df_main = build_main_table(st.session_state.df, selected_metrics)
 
         st.dataframe(
@@ -730,7 +887,7 @@ if st.session_state.df is not None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-# Редактор весов
+# Редактор весов (общий для обоих источников)
 if st.session_state.get('show_weights_editor'):
     with st.expander("Редактор весов метрик", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
