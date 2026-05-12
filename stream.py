@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')  # для экспорта Excel, графики теперь Plotly
+matplotlib.use('Agg')
 import io
 import os
 import pickle
@@ -146,7 +146,6 @@ def check_db_connection():
         st.error(f"❌ Не удалось подключиться к базе данных: {e}")
         st.stop()
 
-# Проверка при старте
 check_db_connection()
 
 # -------------------- ФУНКЦИИ АНАЛИЗА --------------------
@@ -410,131 +409,6 @@ def build_main_table(df, selected_metrics):
         main_data.append(row_data)
     return pd.DataFrame(main_data, columns=main_headers)
 
-# -------------------- ВИЗУАЛИЗАЦИЯ (Plotly) --------------------
-def get_full_df():
-    dfs = []
-    if st.session_state.df_excel is not None:
-        dfs.append(st.session_state.df_excel)
-    if st.session_state.df_db is not None:
-        dfs.append(st.session_state.df_db)
-    return pd.concat(dfs, ignore_index=True) if dfs else None
-
-def normalize_for_radar(df, metrics, player_row):
-    normed = pd.Series(index=metrics, dtype=float)
-    for m in metrics:
-        col = df[m]
-        mn, mx = col.min(), col.max()
-        if mx - mn == 0:
-            normed[m] = 0.5
-        else:
-            val = player_row[m]
-            normed[m] = (val - mn) / (mx - mn)
-        if m in NEGATIVE_METRICS:
-            normed[m] = 1.0 - normed[m]
-    return normed
-
-def build_radar_labels(metrics, players):
-    """
-    players: список Series игроков (может быть один).
-    Возвращает список строк-подписей для осей радара.
-    Каждая подпись содержит название метрики и значения всех переданных игроков.
-    """
-    labels = []
-    for m in metrics:
-        name = METRIC_NAMES_RU.get(m, m)
-        lines = [name]
-        for p in players:
-            val = p[m]
-            if m.endswith('_pct') or m == 'pass_accuracy':
-                detail = format_metric_with_detail(m, val, p)
-            else:
-                detail = f"{val:.2f}"
-            lines.append(f"{p['player']}: {detail}")
-        labels.append("<br>".join(lines))
-    return labels
-
-def create_player_radar_figure(player_row, df, position_weights):
-    pos = get_position_group(player_row['position'])
-    weights = position_weights.get(pos, {})
-    sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
-    radar_metrics = [m for m, _ in sorted_metrics if m in df.columns][:8]
-    if not radar_metrics:
-        radar_metrics = [c for c in df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-
-    labels = build_radar_labels(radar_metrics, [player_row])
-    values = normalize_for_radar(df, radar_metrics, player_row).tolist()
-
-    fig = go.Figure(data=go.Scatterpolar(
-        r=values + values[:1],
-        theta=labels + labels[:1],
-        fill='toself',
-        name=player_row['player'],
-        line_color='blue',
-    ))
-    fig.update_layout(
-        polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
-        showlegend=True,
-        height=550, width=550,
-        margin=dict(l=80, r=80, t=60, b=80),
-    )
-    return fig
-
-def create_compare_figure(p1, p2, radar_metrics, full_df):
-    players = [p1, p2]
-    labels = build_radar_labels(radar_metrics, players)  # общие подписи для обоих
-
-    vals1 = normalize_for_radar(full_df, radar_metrics, p1).tolist()
-    vals2 = normalize_for_radar(full_df, radar_metrics, p2).tolist()
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(
-        r=vals1 + vals1[:1],
-        theta=labels + labels[:1],
-        fill='toself',
-        name=f'{p1["player"]} ({p1["rating"]:.1f})',
-        line_color='blue', opacity=0.6,
-    ))
-    fig.add_trace(go.Scatterpolar(
-        r=vals2 + vals2[:1],
-        theta=labels + labels[:1],
-        fill='toself',
-        name=f'{p2["player"]} ({p2["rating"]:.1f})',
-        line_color='red', opacity=0.6,
-    ))
-    fig.update_layout(
-        polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
-        showlegend=True,
-        height=550, width=550,
-        margin=dict(l=80, r=80, t=60, b=80),
-        title="Сравнение игроков",
-    )
-    return fig
-
-def create_position_radar(players_data, full_df, pos_metrics, colors):
-    # Общие подписи для всех игроков
-    labels = build_radar_labels(pos_metrics[:8], players_data)
-
-    fig = go.Figure()
-    for i, player_row in enumerate(players_data):
-        values = normalize_for_radar(full_df, pos_metrics[:8], player_row).tolist()
-        color = colors[i % len(colors)]
-        fig.add_trace(go.Scatterpolar(
-            r=values + values[:1],
-            theta=labels + labels[:1],   # одни и те же подписи для всех
-            fill='toself',
-            name=player_row['player'],
-            line_color=color,
-            opacity=0.6,
-        ))
-    fig.update_layout(
-        polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
-        showlegend=True,
-        height=800, width=700,
-        margin=dict(l=80, r=80, t=60, b=80),
-        title="Сравнение по позиции",
-    )
-    return fig
-
 # -------------------- ЗАГРУЗКА ИЗ БД --------------------
 def load_from_db(league_name, season, teams=None):
     conn = psycopg2.connect(**get_db_config())
@@ -662,6 +536,166 @@ def get_teams(league_name, season):
     except:
         return []
 
+# -------------------- ВИЗУАЛИЗАЦИЯ (Plotly) --------------------
+def get_full_df():
+    dfs = []
+    if st.session_state.df_excel is not None:
+        dfs.append(st.session_state.df_excel)
+    if st.session_state.df_db is not None:
+        dfs.append(st.session_state.df_db)
+    return pd.concat(dfs, ignore_index=True) if dfs else None
+
+def normalize_for_radar(df, metrics, player_row):
+    normed = pd.Series(index=metrics, dtype=float)
+    for m in metrics:
+        col = df[m]
+        mn, mx = col.min(), col.max()
+        if mx - mn == 0:
+            normed[m] = 0.5
+        else:
+            val = player_row[m]
+            normed[m] = (val - mn) / (mx - mn)
+        if m in NEGATIVE_METRICS:
+            normed[m] = 1.0 - normed[m]
+    return normed
+
+def build_radar_labels(metrics, players):
+    labels = []
+    for m in metrics:
+        name = METRIC_NAMES_RU.get(m, m)
+        lines = [name]
+        for p in players:
+            val = p[m]
+            if m.endswith('_pct') or m == 'pass_accuracy':
+                detail = format_metric_with_detail(m, val, p)
+            else:
+                detail = f"{val:.2f}"
+            lines.append(f"{p['player']}: {detail}")
+        labels.append("<br>".join(lines))
+    return labels
+
+def add_average_trace(fig, radar_metrics, avg_values, labels, full_df):
+    if avg_values is None:
+        return
+    # Нормализуем средние значения по full_df
+    norm_avg = normalize_for_radar(full_df, radar_metrics, pd.Series(avg_values, index=radar_metrics))
+    values = norm_avg.tolist()
+    fig.add_trace(go.Scatterpolar(
+        r=values + values[:1],
+        theta=labels + labels[:1],
+        fill='toself',
+        name='Средние',
+        line=dict(color='gray', dash='dash'),
+        opacity=0.3,
+    ))
+
+def create_player_radar_figure(player_row, df, position_weights, avg_values=None):
+    pos = get_position_group(player_row['position'])
+    weights = position_weights.get(pos, {})
+    sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
+    radar_metrics = [m for m, _ in sorted_metrics if m in df.columns][:8]
+    if not radar_metrics:
+        radar_metrics = [c for c in df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+
+    labels = build_radar_labels(radar_metrics, [player_row])
+    values = normalize_for_radar(df, radar_metrics, player_row).tolist()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=values + values[:1],
+        theta=labels + labels[:1],
+        fill='toself',
+        name=player_row['player'],
+        line_color='blue',
+    ))
+    if avg_values is not None:
+        add_average_trace(fig, radar_metrics, avg_values, labels, df)
+
+    fig.update_layout(
+        polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
+        showlegend=True,
+        height=450, width=450,
+        margin=dict(l=40, r=40, t=40, b=40),
+    )
+    return fig
+
+def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
+    players = [p1, p2]
+    labels = build_radar_labels(radar_metrics, players)
+
+    vals1 = normalize_for_radar(full_df, radar_metrics, p1).tolist()
+    vals2 = normalize_for_radar(full_df, radar_metrics, p2).tolist()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=vals1 + vals1[:1],
+        theta=labels + labels[:1],
+        fill='toself',
+        name=f'{p1["player"]} ({p1["rating"]:.1f})',
+        line_color='blue', opacity=0.6,
+    ))
+    fig.add_trace(go.Scatterpolar(
+        r=vals2 + vals2[:1],
+        theta=labels + labels[:1],
+        fill='toself',
+        name=f'{p2["player"]} ({p2["rating"]:.1f})',
+        line_color='red', opacity=0.6,
+    ))
+    if avg_values is not None:
+        add_average_trace(fig, radar_metrics, avg_values, labels, full_df)
+
+    fig.update_layout(
+        polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
+        showlegend=True,
+        height=500, width=500,
+        margin=dict(l=60, r=60, t=60, b=60),
+        title="Сравнение игроков",
+    )
+    return fig
+
+def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values=None):
+    fig = go.Figure()
+    labels = build_radar_labels(pos_metrics[:8], players_data)
+
+    for i, player_row in enumerate(players_data):
+        values = normalize_for_radar(full_df, pos_metrics[:8], player_row).tolist()
+        color = colors[i % len(colors)]
+        fig.add_trace(go.Scatterpolar(
+            r=values + values[:1],
+            theta=labels + labels[:1],
+            fill='toself',
+            name=player_row['player'],
+            line_color=color,
+            opacity=0.6,
+        ))
+    if avg_values is not None:
+        add_average_trace(fig, pos_metrics[:8], avg_values, labels, full_df)
+
+    fig.update_layout(
+        polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
+        showlegend=True,
+        height=800, width=750,
+        margin=dict(l=80, r=80, t=60, b=80),
+        title="Сравнение по позиции",
+    )
+    return fig
+
+# -------------------- ПОЛУЧЕНИЕ СРЕДНИХ ХАРАКТЕРИСТИК --------------------
+def get_average_series(radar_metrics, full_df):
+    avg_source = st.session_state.get('avg_source', 'Текущие данные')
+    if avg_source == 'Текущие данные' and full_df is not None:
+        return full_df[radar_metrics].mean()
+    elif avg_source == 'Лига из БД':
+        league = st.session_state.get('avg_league')
+        season = st.session_state.get('avg_season')
+        if league and season:
+            df_league = load_from_db(league, season)
+            if df_league is not None and not df_league.empty:
+                df_league = df_league[df_league['minutes'] >= MIN_MINUTES]
+                if not df_league.empty:
+                    return df_league[radar_metrics].mean()
+    return None
+
 # -------------------- ИНТЕРФЕЙС STREAMLIT --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
 st.title("Анализ футболистов InStat")
@@ -682,6 +716,12 @@ if 'last_uploaded_name' not in st.session_state:
     st.session_state.last_uploaded_name = None
 if 'selected_main_metrics' not in st.session_state:
     st.session_state.selected_main_metrics = []
+if 'avg_source' not in st.session_state:
+    st.session_state.avg_source = 'Текущие данные'
+if 'avg_league' not in st.session_state:
+    st.session_state.avg_league = None
+if 'avg_season' not in st.session_state:
+    st.session_state.avg_season = None
 
 with st.sidebar:
     st.header("📂 Источник данных")
@@ -706,6 +746,7 @@ with st.sidebar:
                         st.session_state.position_tables_excel = build_position_tables(df_filtered, st.session_state.current_settings)
                         st.session_state.active_df_type = 'excel'
                         st.session_state.last_uploaded_name = uploaded_file.name
+                        st.session_state.pop('position_compare_params', None)
                         st.success(f"Загружено {len(df_filtered)} игроков (исключено {excluded} с менее чем {MIN_MINUTES} мин.)")
 
     else:  # База данных
@@ -753,6 +794,7 @@ with st.sidebar:
                             st.session_state.df_db = df_filtered
                             st.session_state.position_tables_db = build_position_tables(df_filtered, st.session_state.current_settings)
                             st.session_state.active_df_type = 'db'
+                            st.session_state.pop('position_compare_params', None)
                             st.success(f"Загружено {len(df_filtered)} игроков (исключено {total - len(df_filtered)} с < {MIN_MINUTES} мин.)")
                     except Exception as e:
                         st.error(f"Ошибка: {e}")
@@ -787,8 +829,22 @@ with st.sidebar:
                     st.session_state.position_tables_excel = build_position_tables(df, st.session_state.current_settings)
                 else:
                     st.session_state.position_tables_db = build_position_tables(df, st.session_state.current_settings)
+        st.session_state.pop('position_compare_params', None)
 
-    # Визуализация (сравнение)
+    # Средние характеристики
+    st.header("📊 Средние характеристики")
+    avg_source = st.radio("Источник средних", ["Текущие данные", "Лига из БД"], key="avg_source")
+    if avg_source == "Лига из БД":
+        avg_league = st.selectbox("Лига для средних", get_leagues(), key="avg_league")
+        if avg_league:
+            avg_season = st.selectbox("Сезон для средних", get_seasons(avg_league), key="avg_season")
+        else:
+            avg_season = None
+    else:
+        avg_league = None
+        avg_season = None
+
+    # Визуализация (сравнение двух игроков)
     if st.session_state.df_excel is not None or st.session_state.df_db is not None:
         st.header("3. Визуализация")
         all_players = []
@@ -830,9 +886,11 @@ with st.sidebar:
                         radar_metrics = list(metrics_set)[:8]
                         if not radar_metrics:
                             radar_metrics = [c for c in full_df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-                        fig = create_compare_figure(p1, p2, radar_metrics, full_df)
+                        avg_series = get_average_series(radar_metrics, full_df)
+                        fig = create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=avg_series)
                         st.plotly_chart(fig, use_container_width=True)
 
+        # Интерфейс для сравнения по позиции (кнопка и мультиселект)
         st.subheader("Сравнение игроков одной позиции")
         position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp_v2")
         pos_players = []
@@ -854,7 +912,6 @@ with st.sidebar:
                 if len(selected_labels) < 2:
                     st.warning("Выберите хотя бы двух игроков.")
                 else:
-                    # Сохраняем параметры для построения радара в основной области
                     selected_entries = []
                     for label in selected_labels:
                         for name, src in pos_players:
@@ -903,8 +960,17 @@ if df_active is not None:
             if idx < len(df_active):
                 player_row = df_active.iloc[idx]
                 col1, col2, col3 = st.columns([1, 2, 1])
+                # Радар для выбранного игрока
+                pos = get_position_group(player_row['position'])
+                weights = st.session_state.current_settings.get(pos, {})
+                sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
+                radar_metrics = [m for m, _ in sorted_metrics if m in df_active.columns][:8]
+                if not radar_metrics:
+                    radar_metrics = [c for c in df_active.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                full_df = get_full_df()
+                avg_series = get_average_series(radar_metrics, full_df) if full_df is not None else None
                 with col2:
-                    fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings)
+                    fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
                     st.plotly_chart(fig, use_container_width=True)
 
     for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
@@ -923,15 +989,23 @@ if df_active is not None:
                         candidate = df_active[(df_active['player'] == player_name) & (df_active['minutes'] == player_min)]
                         if not candidate.empty:
                             player_row = candidate.iloc[0]
+                            # Радар для игрока позиции
+                            pos_group = get_position_group(player_row['position'])
+                            weights = st.session_state.current_settings.get(pos_group, {})
+                            sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
+                            radar_metrics = [m for m, _ in sorted_metrics if m in df_active.columns][:8]
+                            if not radar_metrics:
+                                radar_metrics = [c for c in df_active.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                            full_df = get_full_df()
+                            avg_series = get_average_series(radar_metrics, full_df) if full_df is not None else None
                             col1, col2, col3 = st.columns([1, 2, 1])
                             with col2:
-                                fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings)
+                                fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
                                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info(f"Нет игроков позиции {pos}")
-                
-    # Отображение радара сравнения по позиции (если был запрошен из сайдбара)
 
+    # Отображение радара сравнения по позиции (если был запрошен из сайдбара)
     if 'position_compare_params' in st.session_state and st.session_state.position_compare_params:
         params = st.session_state.position_compare_params
         st.header("⚔️ Сравнение игроков одной позиции")
@@ -949,7 +1023,8 @@ if df_active is not None:
                 pos_metrics = [m for m, w in st.session_state.current_settings.get(pos, {}).items() if w != 0 and m in full_df.columns]
                 if pos_metrics:
                     colors = ['blue','red','green','orange','purple','brown']
-                    fig = create_position_radar(players_data, full_df, pos_metrics, colors)
+                    avg_series = get_average_series(pos_metrics, full_df)
+                    fig = create_position_radar(players_data, full_df, pos_metrics, colors, avg_values=avg_series)
                     st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.warning("Для выбранной позиции отсутствуют настроенные метрики.")
@@ -957,7 +1032,7 @@ if df_active is not None:
                 st.warning("Нет данных для нормализации. Загрузите хотя бы один источник.")
         else:
             st.warning("Не удалось найти выбранных игроков в текущих данных.")
-        
+
     if st.button("📥 Экспорт в Excel"):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -1030,6 +1105,7 @@ if st.session_state.get('show_weights_editor'):
                             st.session_state.position_tables_excel = build_position_tables(df, new_weights)
                         else:
                             st.session_state.position_tables_db = build_position_tables(df, new_weights)
+                st.session_state.pop('position_compare_params', None)
                 st.rerun()
         with col2:
             if st.button("Отмена", use_container_width=True, key="cancel_weights"):
