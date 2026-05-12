@@ -1,5 +1,7 @@
-matplotlib
+streamlit
 pandas
 numpy
+matplotlib
 openpyxl
-streamlit
+psycopg2-binary
+python-dotenv
