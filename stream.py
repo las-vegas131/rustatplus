@@ -854,28 +854,17 @@ with st.sidebar:
                 if len(selected_labels) < 2:
                     st.warning("Выберите хотя бы двух игроков.")
                 else:
+                    # Сохраняем параметры для построения радара в основной области
                     selected_entries = []
                     for label in selected_labels:
                         for name, src in pos_players:
                             if f"{name} ({src.upper()})" == label:
                                 selected_entries.append((name, src))
                                 break
-                    players_data = []
-                    for name, src in selected_entries:
-                        source_df = st.session_state.df_excel if src == 'excel' else st.session_state.df_db
-                        player_row = source_df[source_df['player'] == name].iloc[0]
-                        players_data.append(player_row)
-                    full_df = get_full_df()
-                    if full_df is None:
-                        st.error("Нет данных для нормализации.")
-                    else:
-                        pos_metrics = [m for m, w in st.session_state.current_settings.get(position_choice, {}).items() if w != 0 and m in full_df.columns]
-                        if not pos_metrics:
-                            st.error("Для данной позиции не заданы метрики в выбранных данных.")
-                        else:
-                            colors = ['blue','red','green','orange','purple','brown']
-                            fig = create_position_radar(players_data, full_df, pos_metrics, colors)
-                            st.plotly_chart(fig, use_container_width=True)
+                    st.session_state.position_compare_params = {
+                        'entries': selected_entries,
+                        'position': position_choice,
+                    }
 
 # Основная область
 if st.session_state.active_df_type == 'excel':
@@ -940,7 +929,35 @@ if df_active is not None:
                                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info(f"Нет игроков позиции {pos}")
+                
+    # Отображение радара сравнения по позиции (если был запрошен из сайдбара)
 
+    if 'position_compare_params' in st.session_state and st.session_state.position_compare_params:
+        params = st.session_state.position_compare_params
+        st.header("⚔️ Сравнение игроков одной позиции")
+        players_data = []
+        for name, src in params['entries']:
+            source_df = st.session_state.df_excel if src == 'excel' else st.session_state.df_db
+            if source_df is not None:
+                player_row = source_df[source_df['player'] == name]
+                if not player_row.empty:
+                    players_data.append(player_row.iloc[0])
+        if players_data:
+            full_df = get_full_df()
+            if full_df is not None:
+                pos = params['position']
+                pos_metrics = [m for m, w in st.session_state.current_settings.get(pos, {}).items() if w != 0 and m in full_df.columns]
+                if pos_metrics:
+                    colors = ['blue','red','green','orange','purple','brown']
+                    fig = create_position_radar(players_data, full_df, pos_metrics, colors)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Для выбранной позиции отсутствуют настроенные метрики.")
+            else:
+                st.warning("Нет данных для нормализации. Загрузите хотя бы один источник.")
+        else:
+            st.warning("Не удалось найти выбранных игроков в текущих данных.")
+        
     if st.button("📥 Экспорт в Excel"):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
