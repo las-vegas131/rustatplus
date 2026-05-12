@@ -845,54 +845,72 @@ with st.sidebar:
                 else:
                     st.error("Не удалось найти игроков.")
 
+       
+        
         st.subheader("Сравнение игроков одной позиции")
         position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp_v2")
-        # Собираем игроков этой позиции из обоих источников
-        pos_players = []
-        for label in all_players:
-            if label.endswith(" (Excel)"):
-                name = label[:-7]
-                source = st.session_state.df_excel
-            else:
-                name = label[:-4]
-                source = st.session_state.df_db
-            if source is not None:
-                row = source[source['player'] == name]
-                if not row.empty and get_position_group(row.iloc[0]['position']) == position_choice:
-                    pos_players.append(label)
+        
+        # Собираем игроков выбранной позиции из обоих источников
+        pos_players = []   # список кортежей (имя_игрока, источник: 'excel' или 'db')
+        if st.session_state.df_excel is not None:
+            df_excel_pos = st.session_state.df_excel[
+                st.session_state.df_excel['position'].map(get_position_group) == position_choice
+            ]
+            for _, row in df_excel_pos.iterrows():
+                pos_players.append((row['player'], 'excel'))
+        
+        if st.session_state.df_db is not None:
+            df_db_pos = st.session_state.df_db[
+                st.session_state.df_db['position'].map(get_position_group) == position_choice
+            ]
+            for _, row in df_db_pos.iterrows():
+                pos_players.append((row['player'], 'db'))
+        
+        # Формируем отображаемые метки с указанием источника
+        display_labels = [f"{name} ({src.upper()})" for name, src in pos_players]
+        
         if not pos_players:
             st.info(f"Нет игроков позиции **{position_choice}**")
         else:
-            selected_players_labels = st.multiselect(
+            selected_labels = st.multiselect(
                 "Выберите до 6 игроков",
-                pos_players,
+                display_labels,
                 max_selections=6,
                 key="multi_players_pos_v2"
             )
             if st.button("Сравнить игроков позиции", use_container_width=True, key="btn_compare_pos_v2"):
-                if len(selected_players_labels) < 2:
+                if len(selected_labels) < 2:
                     st.warning("Выберите хотя бы двух игроков.")
-                elif len(selected_players_labels) > 6:
-                    st.warning("Максимум 6 игроков.")
                 else:
-                    # Извлекаем имена и формируем объединённый df для сравнения
+                    # Восстанавливаем имена и источники по выбранным меткам
+                    selected_entries = []
+                    for label in selected_labels:
+                        for name, src in pos_players:
+                            if f"{name} ({src.upper()})" == label:
+                                selected_entries.append((name, src))
+                                break
+                    # Извлекаем строки из соответствующих датафреймов
                     players_data = []
-                    for label in selected_players_labels:
-                        if label.endswith(" (Excel)"):
-                            name = label[:-7]
-                            source = st.session_state.df_excel
-                        else:
-                            name = label[:-4]
-                            source = st.session_state.df_db
-                        player_row = source[source['player'] == name].iloc[0]
+                    for name, src in selected_entries:
+                        source_df = st.session_state.df_excel if src == 'excel' else st.session_state.df_db
+                        player_row = source_df[source_df['player'] == name].iloc[0]
                         players_data.append(player_row)
+        
                     combined_df = pd.DataFrame(players_data)
-                    pos_metrics = [m for m, w in st.session_state.current_settings.get(position_choice, {}).items() if w != 0 and m in combined_df.columns]
+                    pos_metrics = [
+                        m for m, w in st.session_state.current_settings.get(position_choice, {}).items()
+                        if w != 0 and m in combined_df.columns
+                    ]
                     if not pos_metrics:
                         st.error("Для данной позиции не заданы метрики в выбранных данных.")
                     else:
                         colors = ['blue','red','green','orange','purple','brown']
-                        fig = create_position_radar([p['player'] for p in players_data], combined_df, pos_metrics, colors)
+                        fig = create_position_radar(
+                            [p['player'] for p in players_data],
+                            combined_df,
+                            pos_metrics,
+                            colors
+                        )
                         st.pyplot(fig)
 
 # Основная область – работает с активным DataFrame
