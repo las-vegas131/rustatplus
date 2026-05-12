@@ -762,19 +762,21 @@ with st.sidebar:
                         st.error(f"Ошибка: {e}")
 
     # Выбор активного источника для таблиц
-    if st.session_state.df_excel is not None or st.session_state.df_db is not None:
-        st.header("2. Активный источник для просмотра")
-        options = []
-        if st.session_state.df_excel is not None:
-            options.append("Excel")
-        if st.session_state.df_db is not None:
-            options.append("База данных")
-        if st.session_state.active_df_type is None:
-            st.session_state.active_df_type = 'excel' if st.session_state.df_excel is not None else 'db'
-        active = st.radio("Показать данные", options, 
-                          index=0 if st.session_state.active_df_type == 'excel' else (1 if 'База данных' in options else 0),
-                          key="active_view")
+    # Выбор активного источника для таблиц (безопасный)
+    if st.session_state.df_excel is not None and st.session_state.df_db is not None:
+    # Доступны оба источника – показываем radio
+        active = st.radio("Показать данные", ["Excel", "База данных"],
+                      index=0 if st.session_state.active_df_type == 'excel' else 1,
+                      key="active_view_v2")
         st.session_state.active_df_type = 'excel' if active == "Excel" else 'db'
+    elif st.session_state.df_excel is not None:
+        st.session_state.active_df_type = 'excel'
+        st.caption("Активные данные: Excel")
+    elif st.session_state.df_db is not None:
+        st.session_state.active_df_type = 'db'
+        st.caption("Активные данные: База данных")
+    else:
+        st.session_state.active_df_type = None
 
     # Общие настройки весов
     st.header("3. Настройки весов")
