@@ -129,7 +129,7 @@ DB_CONFIG = {
     "password": os.getenv("SUPABASE_PASSWORD", "Vegas54325522"),
 }
 
-# -------------------- ФУНКЦИИ АНАЛИЗА (без изменений) --------------------
+# -------------------- ФУНКЦИИ АНАЛИЗА --------------------
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -390,7 +390,7 @@ def build_main_table(df, selected_metrics):
         main_data.append(row_data)
     return pd.DataFrame(main_data, columns=main_headers)
 
-# -------------------- ВИЗУАЛИЗАЦИЯ (без изменений) --------------------
+# -------------------- ВИЗУАЛИЗАЦИЯ --------------------
 def plot_radar_on_axis(ax, player_row, team_avg, radar_metrics, df, title=None, color='blue', show_legend=True):
     labels = []
     for m in radar_metrics:
@@ -437,27 +437,6 @@ def create_player_radar_figure(player_row, df, position_weights):
     fig, ax = plt.subplots(figsize=(4, 4), subplot_kw=dict(polar=True))
     plot_radar_on_axis(ax, player_row, team_avg, radar_metrics, df, show_legend=False)
     plt.tight_layout(pad=0.2)
-    return fig
-
-def create_top5_radars_figure(df, position_weights):
-    n = min(TOP_N_FOR_PLOTS, len(df))
-    best_players = df.head(n)
-    fig, axes = plt.subplots(2, 3, figsize=(18, 14), subplot_kw=dict(polar=True))
-    axes = axes.flatten()
-    for i, (_, player) in enumerate(best_players.iterrows()):
-        pos = get_position_group(player['position'])
-        weights = position_weights.get(pos, {})
-        sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
-        available = [m for m, _ in sorted_metrics if m in df.columns][:8]
-        if not available:
-            available = [c for c in df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-        team_avg = {m: df[m].mean() for m in available}
-        plot_radar_on_axis(axes[i], player, team_avg, available, df,
-                           title=f'{player["player"]} ({player["rating"]:.1f}) - {player["position"]}')
-    for j in range(n, len(axes)):
-        axes[j].set_axis_off()
-    fig.suptitle('ТОП-5 игроков: профили по позициям', fontsize=14, weight='bold')
-    plt.tight_layout()
     return fig
 
 def create_compare_figure(p1, p2, radar_metrics, df):
@@ -528,7 +507,7 @@ def create_position_radar(selected_players, df, pos_metrics, colors):
     return fig
 
 # -------------------- ЗАГРУЗКА ИЗ БД --------------------
-def load_from_db(league_name, season):
+def load_from_db(league_name, season, teams=None):
     conn = psycopg2.connect(**DB_CONFIG)
     query = """
     SELECT 
@@ -560,7 +539,11 @@ def load_from_db(league_name, season):
     JOIN leagues l ON t.league_id = l.id
     WHERE l.name = %s AND ps.season = %s
     """
-    df = pd.read_sql(query, conn, params=[league_name, season])
+    params = [league_name, season]
+    if teams and len(teams) > 0:
+        query += " AND t.name = ANY(%s)"
+        params.append(teams)
+    df = pd.read_sql(query, conn, params=params)
     conn.close()
 
     # Удаляем вратарей
@@ -599,7 +582,7 @@ def load_from_db(league_name, season):
 
     return df
 
-# -------------------- ДИНАМИЧЕСКАЯ ЗАГРУЗКА ЛИГ И СЕЗОНОВ --------------------
+# -------------------- ДИНАМИЧЕСКАЯ ЗАГРУЗКА ЛИГ, СЕЗОНОВ, КОМАНД --------------------
 @st.cache_data(ttl=60)
 def get_leagues():
     try:
@@ -634,14 +617,40 @@ def get_seasons(league_name):
     except Exception as e:
         return []
 
+@st.cache_data(ttl=60)
+def get_teams(league_name, season):
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT t.name
+            FROM teams t
+            JOIN player_stats ps ON t.id = ps.team_id
+            JOIN leagues l ON t.league_id = l.id
+            WHERE l.name = %s AND ps.season = %s
+            ORDER BY t.name
+        """, (league_name, season))
+        teams = [row[0] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return teams
+    except Exception as e:
+        return []
+
 # -------------------- ИНТЕРФЕЙС STREAMLIT --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
 st.title("Анализ футболистов InStat")
 
-if 'df' not in st.session_state:
-    st.session_state.df = None
-if 'position_tables' not in st.session_state:
-    st.session_state.position_tables = {}
+if 'df_excel' not in st.session_state:
+    st.session_state.df_excel = None
+if 'df_db' not in st.session_state:
+    st.session_state.df_db = None
+if 'active_df_type' not in st.session_state:
+    st.session_state.active_df_type = None  # 'excel' или 'db'
+if 'position_tables_excel' not in st.session_state:
+    st.session_state.position_tables_excel = {}
+if 'position_tables_db' not in st.session_state:
+    st.session_state.position_tables_db = {}
 if 'current_settings' not in st.session_state:
     st.session_state.current_settings = load_settings()
 if 'last_uploaded_name' not in st.session_state:
@@ -652,8 +661,7 @@ if 'selected_main_metrics' not in st.session_state:
 # Боковая панель
 with st.sidebar:
     st.header("📂 Источник данных")
-    data_source = st.radio("Выберите источник", ["Excel файл", "База данных (Supabase)"], 
-                           horizontal=True)
+    data_source = st.radio("Загрузка", ["Excel файл", "База данных (Supabase)"], horizontal=True)
 
     if data_source == "Excel файл":
         st.header("1. Загрузка данных")
@@ -670,76 +678,14 @@ with st.sidebar:
                     else:
                         df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
                         df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
-                        st.session_state.df = df_filtered
-                        st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
+                        st.session_state.df_excel = df_filtered
+                        st.session_state.position_tables_excel = build_position_tables(df_filtered, st.session_state.current_settings)
+                        st.session_state.active_df_type = 'excel'
                         st.session_state.last_uploaded_name = uploaded_file.name
                         st.success(f"Загружено {len(df_filtered)} игроков (исключено {excluded} с менее чем {MIN_MINUTES} мин.)")
 
-        st.header("2. Настройки весов")
-        if st.button("Открыть редактор весов", use_container_width=True):
-            st.session_state.show_weights_editor = True
-        if st.button("Сбросить веса по умолчанию", use_container_width=True):
-            st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
-            save_settings(st.session_state.current_settings)
-            st.cache_data.clear()
-            st.success("Веса сброшены.")
-            if st.session_state.df is not None:
-                st.session_state.df = calculate_ratings(st.session_state.df, st.session_state.current_settings)
-                st.session_state.position_tables = build_position_tables(st.session_state.df, st.session_state.current_settings)
-
-        if st.session_state.df is not None:
-            st.header("3. Визуализация")
-            st.subheader("Сравнение двух игроков")
-            compare_player1 = st.selectbox("Игрок 1", st.session_state.df['player'].tolist(), key="cp1")
-            compare_player2 = st.selectbox("Игрок 2", st.session_state.df['player'].tolist(), key="cp2")
-            if st.button("Сравнить выбранных", use_container_width=True):
-                if compare_player1 == compare_player2:
-                    st.warning("Выберите разных игроков.")
-                else:
-                    p1 = st.session_state.df[st.session_state.df['player'] == compare_player1].iloc[0]
-                    p2 = st.session_state.df[st.session_state.df['player'] == compare_player2].iloc[0]
-                    pos1 = get_position_group(p1['position'])
-                    pos2 = get_position_group(p2['position'])
-                    metrics_set = set()
-                    for m in st.session_state.current_settings.get(pos1, {}) | st.session_state.current_settings.get(pos2, {}):
-                        if m in st.session_state.df.columns:
-                            metrics_set.add(m)
-                    radar_metrics = list(metrics_set)[:8]
-                    if not radar_metrics:
-                        radar_metrics = [c for c in st.session_state.df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-                    fig = create_compare_figure(p1, p2, radar_metrics, st.session_state.df)
-                    st.pyplot(fig)
-
-            st.subheader("Сравнение игроков одной позиции")
-            position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp")
-            players_in_pos = st.session_state.df[st.session_state.df['position'].map(get_position_group) == position_choice]['player'].tolist()
-            if not players_in_pos:
-                st.info(f"Нет игроков позиции **{position_choice}**")
-            else:
-                selected_players = st.multiselect(
-                    "Выберите до 6 игроков",
-                    players_in_pos,
-                    max_selections=6,
-                    key="multi_players_pos"
-                )
-                if st.button("Сравнить игроков позиции", use_container_width=True, key="btn_compare_pos"):
-                    if len(selected_players) < 2:
-                        st.warning("Выберите хотя бы двух игроков.")
-                    elif len(selected_players) > 6:
-                        st.warning("Максимум 6 игроков.")
-                    else:
-                        pos_metrics = [m for m, w in st.session_state.current_settings.get(position_choice, {}).items() if w != 0 and m in st.session_state.df.columns]
-                        if not pos_metrics:
-                            st.error("Для данной позиции не заданы метрики.")
-                        else:
-                            colors = ['blue','red','green','orange','purple','brown']
-                            fig = create_position_radar(selected_players, st.session_state.df, pos_metrics, colors)
-                            st.pyplot(fig)
-        else:
-            st.info("Загрузите Excel-файл, чтобы активировать визуализацию.")
-
     else:  # База данных (Supabase)
-        st.header("1. Выбор лиги и сезона")
+        st.header("1. Выбор лиги, сезона и команд")
         leagues_list = get_leagues()
         if not leagues_list:
             st.warning("Нет доступных лиг в базе данных или ошибка подключения.")
@@ -758,10 +704,17 @@ with st.sidebar:
             season = None
 
         if league and season:
+            teams_list = get_teams(league, season)
+            selected_teams = st.multiselect("Команды (оставьте пустым – все)", teams_list, key="teams_db")
+        else:
+            selected_teams = []
+
+        if league and season:
             if st.button("Загрузить данные", use_container_width=True):
                 with st.spinner("Запрос к Supabase..."):
                     try:
-                        df_raw = load_from_db(league, season)
+                        teams_param = None if len(selected_teams) == 0 else selected_teams
+                        df_raw = load_from_db(league, season, teams_param)
                         total = len(df_raw)
                         df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
                         if len(df_filtered) == 0:
@@ -769,78 +722,158 @@ with st.sidebar:
                         else:
                             df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
                             df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
-                            st.session_state.df = df_filtered
-                            st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
+                            st.session_state.df_db = df_filtered
+                            st.session_state.position_tables_db = build_position_tables(df_filtered, st.session_state.current_settings)
+                            st.session_state.active_df_type = 'db'
                             st.success(f"Загружено {len(df_filtered)} игроков (исключено {total - len(df_filtered)} с < {MIN_MINUTES} мин.)")
                     except Exception as e:
                         st.error(f"Ошибка: {e}")
 
-        if st.session_state.df is not None:
-            st.header("2. Настройки весов")
-            if st.button("Открыть редактор весов", use_container_width=True):
-                st.session_state.show_weights_editor = True
-            if st.button("Сбросить веса по умолчанию", use_container_width=True):
-                st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
-                save_settings(st.session_state.current_settings)
-                st.cache_data.clear()
-                st.success("Веса сброшены.")
-                if st.session_state.df is not None:
-                    st.session_state.df = calculate_ratings(st.session_state.df, st.session_state.current_settings)
-                    st.session_state.position_tables = build_position_tables(st.session_state.df, st.session_state.current_settings)
+    # Выбор активного источника для таблиц
+    if st.session_state.df_excel is not None or st.session_state.df_db is not None:
+        st.header("2. Активный источник для просмотра")
+        options = []
+        if st.session_state.df_excel is not None:
+            options.append("Excel")
+        if st.session_state.df_db is not None:
+            options.append("База данных")
+        if st.session_state.active_df_type is None:
+            st.session_state.active_df_type = 'excel' if st.session_state.df_excel is not None else 'db'
+        active = st.radio("Показать данные", options, 
+                          index=0 if st.session_state.active_df_type == 'excel' else (1 if 'База данных' in options else 0),
+                          key="active_view")
+        st.session_state.active_df_type = 'excel' if active == "Excel" else 'db'
 
-            st.header("3. Визуализация")
-            st.subheader("Сравнение двух игроков")
-            compare_player1 = st.selectbox("Игрок 1", st.session_state.df['player'].tolist(), key="cp1_db")
-            compare_player2 = st.selectbox("Игрок 2", st.session_state.df['player'].tolist(), key="cp2_db")
-            if st.button("Сравнить выбранных", use_container_width=True, key="compare_btn_db"):
-                if compare_player1 == compare_player2:
-                    st.warning("Выберите разных игроков.")
+    # Общие настройки весов
+    st.header("3. Настройки весов")
+    if st.button("Открыть редактор весов", use_container_width=True):
+        st.session_state.show_weights_editor = True
+    if st.button("Сбросить веса по умолчанию", use_container_width=True):
+        st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
+        save_settings(st.session_state.current_settings)
+        st.cache_data.clear()
+        st.success("Веса сброшены.")
+        # Пересчитать, если есть данные
+        for attr in ['df_excel', 'df_db']:
+            df = getattr(st.session_state, attr)
+            if df is not None:
+                setattr(st.session_state, attr, calculate_ratings(df, st.session_state.current_settings))
+                if attr == 'df_excel':
+                    st.session_state.position_tables_excel = build_position_tables(df, st.session_state.current_settings)
                 else:
-                    p1 = st.session_state.df[st.session_state.df['player'] == compare_player1].iloc[0]
-                    p2 = st.session_state.df[st.session_state.df['player'] == compare_player2].iloc[0]
+                    st.session_state.position_tables_db = build_position_tables(df, st.session_state.current_settings)
+
+    # Визуализация (сравнение игроков) – доступна, если есть хотя бы один датафрейм
+    if st.session_state.df_excel is not None or st.session_state.df_db is not None:
+        st.header("4. Визуализация")
+
+        # Формируем общий список игроков с метками источника
+        all_players = []
+        if st.session_state.df_excel is not None:
+            for p in st.session_state.df_excel['player'].tolist():
+                all_players.append(f"{p} (Excel)")
+        if st.session_state.df_db is not None:
+            for p in st.session_state.df_db['player'].tolist():
+                all_players.append(f"{p} (DB)")
+
+        st.subheader("Сравнение двух игроков")
+        compare_player1_label = st.selectbox("Игрок 1", all_players, key="cp1_v2")
+        compare_player2_label = st.selectbox("Игрок 2", all_players, key="cp2_v2")
+        if st.button("Сравнить выбранных", use_container_width=True, key="compare_btn_v2"):
+            if compare_player1_label == compare_player2_label:
+                st.warning("Выберите разных игроков.")
+            else:
+                # Извлекаем имя и источник
+                def extract_player(label):
+                    if label.endswith(" (Excel)"):
+                        return label[:-7], st.session_state.df_excel
+                    elif label.endswith(" (DB)"):
+                        return label[:-4], st.session_state.df_db
+                    return None, None
+                name1, source1 = extract_player(compare_player1_label)
+                name2, source2 = extract_player(compare_player2_label)
+                if name1 and name2 and source1 is not None and source2 is not None:
+                    p1 = source1[source1['player'] == name1].iloc[0]
+                    p2 = source2[source2['player'] == name2].iloc[0]
+                    # Для сравнения создаём объединённый DataFrame из двух строк, чтобы нормализация работала корректно
+                    combined_df = pd.concat([p1.to_frame().T, p2.to_frame().T], ignore_index=True)
                     pos1 = get_position_group(p1['position'])
                     pos2 = get_position_group(p2['position'])
                     metrics_set = set()
                     for m in st.session_state.current_settings.get(pos1, {}) | st.session_state.current_settings.get(pos2, {}):
-                        if m in st.session_state.df.columns:
+                        if m in combined_df.columns:
                             metrics_set.add(m)
                     radar_metrics = list(metrics_set)[:8]
                     if not radar_metrics:
-                        radar_metrics = [c for c in st.session_state.df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-                    fig = create_compare_figure(p1, p2, radar_metrics, st.session_state.df)
+                        radar_metrics = [c for c in combined_df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                    fig = create_compare_figure(p1, p2, radar_metrics, combined_df)
                     st.pyplot(fig)
+                else:
+                    st.error("Не удалось найти игроков.")
 
-            st.subheader("Сравнение игроков одной позиции")
-            position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp_db")
-            players_in_pos = st.session_state.df[st.session_state.df['position'].map(get_position_group) == position_choice]['player'].tolist()
-            if not players_in_pos:
-                st.info(f"Нет игроков позиции **{position_choice}**")
+        st.subheader("Сравнение игроков одной позиции")
+        position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp_v2")
+        # Собираем игроков этой позиции из обоих источников
+        pos_players = []
+        for label in all_players:
+            if label.endswith(" (Excel)"):
+                name = label[:-7]
+                source = st.session_state.df_excel
             else:
-                selected_players = st.multiselect(
-                    "Выберите до 6 игроков",
-                    players_in_pos,
-                    max_selections=6,
-                    key="multi_players_pos_db"
-                )
-                if st.button("Сравнить игроков позиции", use_container_width=True, key="btn_compare_pos_db"):
-                    if len(selected_players) < 2:
-                        st.warning("Выберите хотя бы двух игроков.")
-                    elif len(selected_players) > 6:
-                        st.warning("Максимум 6 игроков.")
-                    else:
-                        pos_metrics = [m for m, w in st.session_state.current_settings.get(position_choice, {}).items() if w != 0 and m in st.session_state.df.columns]
-                        if not pos_metrics:
-                            st.error("Для данной позиции не заданы метрики.")
-                        else:
-                            colors = ['blue','red','green','orange','purple','brown']
-                            fig = create_position_radar(selected_players, st.session_state.df, pos_metrics, colors)
-                            st.pyplot(fig)
+                name = label[:-4]
+                source = st.session_state.df_db
+            if source is not None:
+                row = source[source['player'] == name]
+                if not row.empty and get_position_group(row.iloc[0]['position']) == position_choice:
+                    pos_players.append(label)
+        if not pos_players:
+            st.info(f"Нет игроков позиции **{position_choice}**")
         else:
-            st.info("Загрузите данные из БД, чтобы активировать визуализацию.")
+            selected_players_labels = st.multiselect(
+                "Выберите до 6 игроков",
+                pos_players,
+                max_selections=6,
+                key="multi_players_pos_v2"
+            )
+            if st.button("Сравнить игроков позиции", use_container_width=True, key="btn_compare_pos_v2"):
+                if len(selected_players_labels) < 2:
+                    st.warning("Выберите хотя бы двух игроков.")
+                elif len(selected_players_labels) > 6:
+                    st.warning("Максимум 6 игроков.")
+                else:
+                    # Извлекаем имена и формируем объединённый df для сравнения
+                    players_data = []
+                    for label in selected_players_labels:
+                        if label.endswith(" (Excel)"):
+                            name = label[:-7]
+                            source = st.session_state.df_excel
+                        else:
+                            name = label[:-4]
+                            source = st.session_state.df_db
+                        player_row = source[source['player'] == name].iloc[0]
+                        players_data.append(player_row)
+                    combined_df = pd.DataFrame(players_data)
+                    pos_metrics = [m for m, w in st.session_state.current_settings.get(position_choice, {}).items() if w != 0 and m in combined_df.columns]
+                    if not pos_metrics:
+                        st.error("Для данной позиции не заданы метрики в выбранных данных.")
+                    else:
+                        colors = ['blue','red','green','orange','purple','brown']
+                        fig = create_position_radar([p['player'] for p in players_data], combined_df, pos_metrics, colors)
+                        st.pyplot(fig)
 
-# Основная область (общая для обоих источников)
-if st.session_state.df is not None:
-    all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in st.session_state.df.columns]
+# Основная область – работает с активным DataFrame
+if st.session_state.active_df_type == 'excel':
+    df_active = st.session_state.df_excel
+    position_tables_active = st.session_state.position_tables_excel
+elif st.session_state.active_df_type == 'db':
+    df_active = st.session_state.df_db
+    position_tables_active = st.session_state.position_tables_db
+else:
+    df_active = None
+    position_tables_active = {}
+
+if df_active is not None:
+    all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
     metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in all_metrics}
     with st.expander("Настройка колонок общей таблицы"):
         selected_metrics = st.multiselect(
@@ -858,7 +891,7 @@ if st.session_state.df is not None:
     tabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
 
     with tabs[0]:
-        df_main = build_main_table(st.session_state.df, selected_metrics)
+        df_main = build_main_table(df_active, selected_metrics)
 
         st.dataframe(
             df_main,
@@ -871,16 +904,16 @@ if st.session_state.df is not None:
 
         if "main_table" in st.session_state and st.session_state.main_table.selection.rows:
             idx = next(iter(st.session_state.main_table.selection.rows))
-            if idx < len(st.session_state.df):
-                player_row = st.session_state.df.iloc[idx]
+            if idx < len(df_active):
+                player_row = df_active.iloc[idx]
                 col1, col2, col3 = st.columns([1, 2, 1])
                 with col2:
-                    fig = create_player_radar_figure(player_row, st.session_state.df, st.session_state.current_settings)
+                    fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings)
                     st.pyplot(fig)
 
     for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
         with tabs[i]:
-            rows, headers = st.session_state.position_tables.get(pos, ([], []))
+            rows, headers = position_tables_active.get(pos, ([], []))
             if rows:
                 numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
                 df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
@@ -898,12 +931,12 @@ if st.session_state.df is not None:
                     if idx < len(rows):
                         player_name = rows[idx][0]
                         player_min = int(rows[idx][1])
-                        candidate = st.session_state.df[(st.session_state.df['player'] == player_name) & (st.session_state.df['minutes'] == player_min)]
+                        candidate = df_active[(df_active['player'] == player_name) & (df_active['minutes'] == player_min)]
                         if not candidate.empty:
                             player_row = candidate.iloc[0]
                             col1, col2, col3 = st.columns([1, 2, 1])
                             with col2:
-                                fig = create_player_radar_figure(player_row, st.session_state.df, st.session_state.current_settings)
+                                fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings)
                                 st.pyplot(fig)
             else:
                 st.info(f"Нет игроков позиции {pos}")
@@ -912,7 +945,7 @@ if st.session_state.df is not None:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_main.to_excel(writer, sheet_name='Общий рейтинг', index=False)
-            for pos, (rows, headers) in st.session_state.position_tables.items():
+            for pos, (rows, headers) in position_tables_active.items():
                 if rows:
                     df_pos = pd.DataFrame(rows, columns=headers)
                     df_pos.to_excel(writer, sheet_name=pos, index=False)
@@ -936,13 +969,13 @@ if st.session_state.df is not None:
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
-# Редактор весов (общий для обоих источников)
+# Редактор весов (общий)
 if st.session_state.get('show_weights_editor'):
     with st.expander("Редактор весов метрик", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
         pos_names = {'FW':'Нападающие','AM':'Атак. полузащитники','CM':'Центр. полузащитники','FB':'Крайние защитники','CB':'Центр. защитники'}
-        if st.session_state.df is not None:
-            available_metrics = [m for m in ALL_POSSIBLE_METRICS if m in st.session_state.df.columns]
+        if df_active is not None:
+            available_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
         else:
             available_metrics = ALL_POSSIBLE_METRICS
         weight_tabs = st.tabs([pos_names[p] for p in positions_order])
@@ -977,10 +1010,15 @@ if st.session_state.get('show_weights_editor'):
                 st.session_state.show_weights_editor = False
                 st.cache_data.clear()
                 st.success("Веса обновлены. Данные пересчитываются...")
-                if st.session_state.df is not None:
-                    st.session_state.df = calculate_ratings(st.session_state.df, new_weights)
-                    st.session_state.position_tables = build_position_tables(st.session_state.df, new_weights)
-                    st.rerun()
+                for attr in ['df_excel', 'df_db']:
+                    df = getattr(st.session_state, attr)
+                    if df is not None:
+                        setattr(st.session_state, attr, calculate_ratings(df, new_weights))
+                        if attr == 'df_excel':
+                            st.session_state.position_tables_excel = build_position_tables(df, new_weights)
+                        else:
+                            st.session_state.position_tables_db = build_position_tables(df, new_weights)
+                st.rerun()
         with col2:
             if st.button("Отмена", use_container_width=True, key="cancel_weights"):
                 st.session_state.show_weights_editor = False
