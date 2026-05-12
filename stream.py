@@ -559,7 +559,7 @@ def normalize_for_radar(df, metrics, player_row):
             normed[m] = 1.0 - normed[m]
     return normed
 
-def build_radar_labels(metrics, players):
+def build_radar_labels(metrics, players, avg_series=None):
     labels = []
     for m in metrics:
         name = METRIC_NAMES_RU.get(m, m)
@@ -571,13 +571,20 @@ def build_radar_labels(metrics, players):
             else:
                 detail = f"{val:.2f}"
             lines.append(f"{p['player']}: {detail}")
+        if avg_series is not None and m in avg_series:
+            avg_val = avg_series[m]
+            if pd.notna(avg_val):
+                if m.endswith('_pct') or m == 'pass_accuracy':
+                    avg_detail = f"{avg_val:.1f}%"
+                else:
+                    avg_detail = f"{avg_val:.2f}"
+                lines.append(f"Средние: {avg_detail}")
         labels.append("<br>".join(lines))
     return labels
 
 def add_average_trace(fig, radar_metrics, avg_values, labels, full_df):
     if avg_values is None:
         return
-    # Нормализуем средние значения по full_df
     norm_avg = normalize_for_radar(full_df, radar_metrics, pd.Series(avg_values, index=radar_metrics))
     values = norm_avg.tolist()
     fig.add_trace(go.Scatterpolar(
@@ -597,7 +604,7 @@ def create_player_radar_figure(player_row, df, position_weights, avg_values=None
     if not radar_metrics:
         radar_metrics = [c for c in df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
 
-    labels = build_radar_labels(radar_metrics, [player_row])
+    labels = build_radar_labels(radar_metrics, [player_row], avg_series=avg_values)
     values = normalize_for_radar(df, radar_metrics, player_row).tolist()
 
     fig = go.Figure()
@@ -621,7 +628,7 @@ def create_player_radar_figure(player_row, df, position_weights, avg_values=None
 
 def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
     players = [p1, p2]
-    labels = build_radar_labels(radar_metrics, players)
+    labels = build_radar_labels(radar_metrics, players, avg_series=avg_values)
 
     vals1 = normalize_for_radar(full_df, radar_metrics, p1).tolist()
     vals2 = normalize_for_radar(full_df, radar_metrics, p2).tolist()
@@ -655,7 +662,7 @@ def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
 
 def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values=None):
     fig = go.Figure()
-    labels = build_radar_labels(pos_metrics[:8], players_data)
+    labels = build_radar_labels(pos_metrics[:8], players_data, avg_series=avg_values)
 
     for i, player_row in enumerate(players_data):
         values = normalize_for_radar(full_df, pos_metrics[:8], player_row).tolist()
@@ -960,7 +967,6 @@ if df_active is not None:
             if idx < len(df_active):
                 player_row = df_active.iloc[idx]
                 col1, col2, col3 = st.columns([1, 2, 1])
-                # Радар для выбранного игрока
                 pos = get_position_group(player_row['position'])
                 weights = st.session_state.current_settings.get(pos, {})
                 sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
@@ -989,7 +995,6 @@ if df_active is not None:
                         candidate = df_active[(df_active['player'] == player_name) & (df_active['minutes'] == player_min)]
                         if not candidate.empty:
                             player_row = candidate.iloc[0]
-                            # Радар для игрока позиции
                             pos_group = get_position_group(player_row['position'])
                             weights = st.session_state.current_settings.get(pos_group, {})
                             sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
@@ -1005,7 +1010,7 @@ if df_active is not None:
             else:
                 st.info(f"Нет игроков позиции {pos}")
 
-    # Отображение радара сравнения по позиции (если был запрошен из сайдбара)
+    # Отображение радара сравнения по позиции
     if 'position_compare_params' in st.session_state and st.session_state.position_compare_params:
         params = st.session_state.position_compare_params
         st.header("⚔️ Сравнение игроков одной позиции")
