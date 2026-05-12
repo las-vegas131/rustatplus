@@ -433,17 +433,24 @@ def normalize_for_radar(df, metrics, player_row):
             normed[m] = 1.0 - normed[m]
     return normed
 
-def build_radar_labels(metrics, example_player_row):
-    """Создаёт подписи для осей радара с названием метрики и примером значения (для первого игрока)"""
+def build_radar_labels(metrics, players):
+    """
+    players: список Series игроков (может быть один).
+    Возвращает список строк-подписей для осей радара.
+    Каждая подпись содержит название метрики и значения всех переданных игроков.
+    """
     labels = []
     for m in metrics:
         name = METRIC_NAMES_RU.get(m, m)
-        val = example_player_row[m]
-        if m.endswith('_pct') or m == 'pass_accuracy':
-            detail = format_metric_with_detail(m, val, example_player_row)
-            labels.append(f"{name}<br>{detail}")
-        else:
-            labels.append(f"{name}<br>{val:.2f}")
+        lines = [name]
+        for p in players:
+            val = p[m]
+            if m.endswith('_pct') or m == 'pass_accuracy':
+                detail = format_metric_with_detail(m, val, p)
+            else:
+                detail = f"{val:.2f}"
+            lines.append(f"{p['player']}: {detail}")
+        labels.append("<br>".join(lines))
     return labels
 
 def create_player_radar_figure(player_row, df, position_weights):
@@ -454,7 +461,7 @@ def create_player_radar_figure(player_row, df, position_weights):
     if not radar_metrics:
         radar_metrics = [c for c in df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
 
-    labels = build_radar_labels(radar_metrics, player_row)
+    labels = build_radar_labels(radar_metrics, [player_row])
     values = normalize_for_radar(df, radar_metrics, player_row).tolist()
 
     fig = go.Figure(data=go.Scatterpolar(
@@ -467,58 +474,53 @@ def create_player_radar_figure(player_row, df, position_weights):
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
-        height=400,
-        width=400,
+        height=400, width=400,
         margin=dict(l=20, r=20, t=30, b=20),
     )
     return fig
 
 def create_compare_figure(p1, p2, radar_metrics, full_df):
-    # Используем метки первого игрока как общие для всего радара
-    labels = build_radar_labels(radar_metrics, p1)
+    players = [p1, p2]
+    labels = build_radar_labels(radar_metrics, players)  # общие подписи для обоих
+
     vals1 = normalize_for_radar(full_df, radar_metrics, p1).tolist()
     vals2 = normalize_for_radar(full_df, radar_metrics, p2).tolist()
 
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
         r=vals1 + vals1[:1],
-        theta=labels + labels[:1],  # одинаковые метки для обоих
+        theta=labels + labels[:1],
         fill='toself',
         name=f'{p1["player"]} ({p1["rating"]:.1f})',
-        line_color='blue',
-        opacity=0.6,
+        line_color='blue', opacity=0.6,
     ))
     fig.add_trace(go.Scatterpolar(
         r=vals2 + vals2[:1],
-        theta=labels + labels[:1],  # одинаковые метки
+        theta=labels + labels[:1],
         fill='toself',
         name=f'{p2["player"]} ({p2["rating"]:.1f})',
-        line_color='red',
-        opacity=0.6,
+        line_color='red', opacity=0.6,
     ))
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
-        height=400,
-        width=400,
+        height=400, width=400,
         margin=dict(l=20, r=20, t=30, b=20),
         title="Сравнение игроков",
     )
     return fig
 
 def create_position_radar(players_data, full_df, pos_metrics, colors):
+    # Общие подписи для всех игроков
+    labels = build_radar_labels(pos_metrics[:8], players_data)
+
     fig = go.Figure()
-    # Используем метрики первого игрока для общих подписей осей
-    if not players_data:
-        return fig
-    labels = build_radar_labels(pos_metrics[:8], players_data[0])
-    
     for i, player_row in enumerate(players_data):
         values = normalize_for_radar(full_df, pos_metrics[:8], player_row).tolist()
         color = colors[i % len(colors)]
         fig.add_trace(go.Scatterpolar(
             r=values + values[:1],
-            theta=labels + labels[:1],  # одинаковые метки для всех
+            theta=labels + labels[:1],   # одни и те же подписи для всех
             fill='toself',
             name=player_row['player'],
             line_color=color,
@@ -527,8 +529,7 @@ def create_position_radar(players_data, full_df, pos_metrics, colors):
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
-        height=500,
-        width=600,
+        height=500, width=600,
         margin=dict(l=20, r=20, t=30, b=20),
         title="Сравнение по позиции",
     )
