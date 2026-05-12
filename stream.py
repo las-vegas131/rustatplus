@@ -12,8 +12,32 @@ import warnings
 import psycopg2
 from dotenv import load_dotenv
 
+# -------------------- ПРОВЕРКА ПОДКЛЮЧЕНИЯ К БД --------------------
+def check_db_connection():
+    required_vars = ["SUPABASE_HOST", "SUPABASE_PORT", "SUPABASE_DBNAME", 
+                     "SUPABASE_USER", "SUPABASE_PASSWORD"]
+    missing = [var for var in required_vars if not os.getenv(var)]
+    if missing:
+        st.error(f"❌ Отсутствуют переменные окружения: {', '.join(missing)}. "
+                 f"Добавьте их в файл `.env`.")
+        st.stop()
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv("SUPABASE_HOST"),
+            port=os.getenv("SUPABASE_PORT"),
+            dbname=os.getenv("SUPABASE_DBNAME"),
+            user=os.getenv("SUPABASE_USER"),
+            password=os.getenv("SUPABASE_PASSWORD"),
+        )
+        conn.close()
+    except Exception as e:
+        st.error(f"❌ Не удалось подключиться к базе данных: {e}")
+        st.stop()
+
 warnings.filterwarnings('ignore')
 load_dotenv()
+check_db_connection()  
+
 
 # -------------------- ГЛОБАЛЬНЫЕ КОНСТАНТЫ --------------------
 MIN_MINUTES = 90
@@ -121,13 +145,14 @@ METRIC_NAMES_RU = {
 }
 
 # -------------------- ПАРАМЕТРЫ ПОДКЛЮЧЕНИЯ К БД --------------------
-DB_CONFIG = {
-    "host": os.getenv("SUPABASE_HOST", "aws-1-eu-north-1.pooler.supabase.com"),
-    "port": os.getenv("SUPABASE_PORT", "5432"),
-    "dbname": os.getenv("SUPABASE_DBNAME", "postgres"),
-    "user": os.getenv("SUPABASE_USER", "postgres.nxnupydntfmhutklslhm"),
-    "password": os.getenv("SUPABASE_PASSWORD", "Vegas54325522"),
-}
+def get_db_config():
+    return {
+        "host": os.getenv("SUPABASE_HOST"),
+        "port": os.getenv("SUPABASE_PORT"),
+        "dbname": os.getenv("SUPABASE_DBNAME"),
+        "user": os.getenv("SUPABASE_USER"),
+        "password": os.getenv("SUPABASE_PASSWORD"),
+    }
 
 # -------------------- ФУНКЦИИ АНАЛИЗА --------------------
 def load_settings():
@@ -508,7 +533,7 @@ def create_position_radar(selected_players, df, pos_metrics, colors):
 
 # -------------------- ЗАГРУЗКА ИЗ БД --------------------
 def load_from_db(league_name, season, teams=None):
-    conn = psycopg2.connect(**DB_CONFIG)
+    conn = psycopg2.connect(**get_db_config())
     query = """
     SELECT 
         p.name AS player, p.position,
@@ -586,7 +611,7 @@ def load_from_db(league_name, season, teams=None):
 @st.cache_data(ttl=60)
 def get_leagues():
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = psycopg2.connect(**get_db_config())
         cur = conn.cursor()
         cur.execute("SELECT name FROM leagues ORDER BY name")
         leagues = [row[0] for row in cur.fetchall()]
@@ -600,7 +625,7 @@ def get_leagues():
 @st.cache_data(ttl=60)
 def get_seasons(league_name):
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = psycopg2.connect(**get_db_config())
         cur = conn.cursor()
         cur.execute("""
             SELECT DISTINCT ps.season
@@ -620,7 +645,7 @@ def get_seasons(league_name):
 @st.cache_data(ttl=60)
 def get_teams(league_name, season):
     try:
-        conn = psycopg2.connect(**DB_CONFIG)
+        conn = psycopg2.connect(**get_db_config())
         cur = conn.cursor()
         cur.execute("""
             SELECT DISTINCT t.name
