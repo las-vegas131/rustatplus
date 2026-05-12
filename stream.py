@@ -599,6 +599,41 @@ def load_from_db(league_name, season):
 
     return df
 
+# -------------------- ДИНАМИЧЕСКАЯ ЗАГРУЗКА ЛИГ И СЕЗОНОВ --------------------
+@st.cache_data(ttl=60)
+def get_leagues():
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM leagues ORDER BY name")
+        leagues = [row[0] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return leagues
+    except Exception as e:
+        st.error(f"Не удалось подключиться к базе данных: {e}")
+        return []
+
+@st.cache_data(ttl=60)
+def get_seasons(league_name):
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT DISTINCT ps.season
+            FROM player_stats ps
+            JOIN teams t ON ps.team_id = t.id
+            JOIN leagues l ON t.league_id = l.id
+            WHERE l.name = %s
+            ORDER BY ps.season
+        """, (league_name,))
+        seasons = [row[0] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return seasons
+    except Exception as e:
+        return []
+
 # -------------------- ИНТЕРФЕЙС STREAMLIT --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
 st.title("Анализ футболистов InStat")
@@ -704,27 +739,41 @@ with st.sidebar:
             st.info("Загрузите Excel-файл, чтобы активировать визуализацию.")
 
     else:  # База данных (Supabase)
-        st.header("1. Подключение к БД")
-        st.caption("Используются параметры из файла .env")
-        # Можно динамически загрузить список лиг, но пока статика
-        league = st.selectbox("Лига", ["English Premier League", "French Ligue 1"])
-        season = st.selectbox("Сезон", ["2024/2025"])
-        if st.button("Загрузить данные", use_container_width=True):
-            with st.spinner("Запрос к Supabase..."):
-                try:
-                    df_raw = load_from_db(league, season)
-                    total = len(df_raw)
-                    df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
-                    if len(df_filtered) == 0:
-                        st.error("Нет игроков с достаточным игровым временем.")
-                    else:
-                        df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
-                        df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
-                        st.session_state.df = df_filtered
-                        st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
-                        st.success(f"Загружено {len(df_filtered)} игроков (исключено {total - len(df_filtered)} с < {MIN_MINUTES} мин.)")
-                except Exception as e:
-                    st.error(f"Ошибка: {e}")
+        st.header("1. Выбор лиги и сезона")
+        leagues_list = get_leagues()
+        if not leagues_list:
+            st.warning("Нет доступных лиг в базе данных или ошибка подключения.")
+            league = None
+        else:
+            league = st.selectbox("Лига", leagues_list, key="league_db")
+
+        if league:
+            seasons_list = get_seasons(league)
+            if not seasons_list:
+                st.warning(f"Для лиги '{league}' нет данных по сезонам.")
+                season = None
+            else:
+                season = st.selectbox("Сезон", seasons_list, key="season_db")
+        else:
+            season = None
+
+        if league and season:
+            if st.button("Загрузить данные", use_container_width=True):
+                with st.spinner("Запрос к Supabase..."):
+                    try:
+                        df_raw = load_from_db(league, season)
+                        total = len(df_raw)
+                        df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
+                        if len(df_filtered) == 0:
+                            st.error("Нет игроков с достаточным игровым временем.")
+                        else:
+                            df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
+                            df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
+                            st.session_state.df = df_filtered
+                            st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
+                            st.success(f"Загружено {len(df_filtered)} игроков (исключено {total - len(df_filtered)} с < {MIN_MINUTES} мин.)")
+                    except Exception as e:
+                        st.error(f"Ошибка: {e}")
 
         if st.session_state.df is not None:
             st.header("2. Настройки весов")
@@ -789,7 +838,7 @@ with st.sidebar:
         else:
             st.info("Загрузите данные из БД, чтобы активировать визуализацию.")
 
-# Основная область
+# Основная область (общая для обоих источников)
 if st.session_state.df is not None:
     all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in st.session_state.df.columns]
     metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in all_metrics}
