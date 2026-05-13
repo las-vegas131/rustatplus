@@ -23,22 +23,60 @@ SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_settings.pkl')
 
 ALL_POSSIBLE_METRICS = [
     'goals_p90', 'assists_p90', 'shots_p90', 'shots_on_target_p90',
-    'key_passes_p90', 'dribbles_p90', 'dribbles_success_pct',
-    'tackles_p90', 'tackles_success_pct', 'interceptions_p90',
-    'pass_accuracy', 'passes_p90', 'crosses_p90', 'crosses_accuracy',
-    'xG_p90', 'challenges_p90', 'challenges_won_pct',
+    'goals_by_head_p90', 'free_kick_shots_p90', 'free_kick_goals_p90',
+    'shots_from_penalty_area_p90', 'shots_on_target_penalty_area_p90',
+    'shots_outside_penalty_area_p90', 'shots_on_target_outside_penalty_area_p90',
+    'headers_p90', 'headers_on_target_p90',
+    'xG_p90',
+    'key_passes_p90', 'passes_p90', 'pass_accuracy',
+    'short_passes_p90', 'short_passes_accuracy',
+    'long_passes_p90', 'long_passes_accuracy',
+    'progressive_passes_p90', 'progressive_passes_accuracy',
+    'passes_final_third_p90', 'passes_final_third_accuracy',
+    'passes_into_penalty_box_p90', 'passes_into_penalty_box_accuracy',
+    'super_long_passes_p90', 'super_long_passes_accuracy',
+    'crosses_p90', 'crosses_accuracy',
+    'passes_for_shot_p90',
+    'dribbles_p90', 'dribbles_success_pct',
+    'dribbling_final_third_p90', 'dribbling_final_third_success_pct',
+    'carry_p90',
+    'challenges_p90', 'challenges_won_pct',
+    'defensive_challenges_p90', 'defensive_challenges_won_pct',
+    'attacking_challenges_p90', 'attacking_challenges_won_pct',
     'air_challenges_p90', 'air_challenges_won_pct',
-    'fouls_suffered_p90', 'progressive_passes_p90',
-    'progressive_passes_accuracy', 'passes_final_third_p90',
-    'passes_final_third_accuracy', 'chances_p90',
-    'chances_successful_p90', 'involvement_scoring_p90',
+    'tackles_p90', 'tackles_success_pct',
+    'interceptions_p90',
+    'loose_ball_recoveries_p90',
     'actions_opp_box_p90', 'actions_opp_box_success_p90',
-    'final_third_entries_p90', 'final_third_carry_p90',
+    'chances_p90', 'chances_successful_p90',
+    'chances_created_p90',
+    'involvement_scoring_p90',
+    'shots_on_target_pct',
+    'lost_balls_p90', 'lost_balls_own_half_p90', 'individual_ball_losses_p90',
+    'lost_balls_after_passes_p90',
+    'challenges_unsuccessful_p90', 'dribbles_unsuccessful_p90',
+    'bad_ball_control_p90', 'offsides_p90',
+    'mistakes_goals_p90', 'mistakes_chances_p90',
+    'fouls_p90', 'fouls_suffered_p90',
+    'yellow_cards_p90', 'red_cards_p90',
     'ball_recoveries_p90', 'ball_recoveries_opp_half_p90',
-    'loose_ball_recoveries_p90', 'actions_successful_p90',
-    'lost_balls_p90', 'lost_balls_own_half_p90',
-    'individual_ball_losses_p90', 'yellow_cards_p90',
-    'red_cards_p90', 'mistakes_goals_p90', 'mistakes_chances_p90',
+    'actions_successful_p90', 'actions_unsuccessful_p90',
+    'final_third_entries_p90', 'final_third_carry_p90',
+    'final_third_entries_pass_p90',
+    'open_passes_received_p90',
+    'long_open_passes_received_p90',
+    'super_long_open_passes_received_p90',
+    'open_passes_received_first_third_p90',
+    'open_passes_received_central_third_p90',
+    'open_passes_received_final_third_p90',
+    'open_passes_received_opponent_box_p90',
+]
+
+NEGATIVE_METRICS = [
+    'lost_balls_p90', 'lost_balls_own_half_p90', 'individual_ball_losses_p90',
+    'lost_balls_after_passes_p90', 'challenges_unsuccessful_p90',
+    'dribbles_unsuccessful_p90', 'bad_ball_control_p90', 'offsides_p90',
+    'yellow_cards_p90', 'red_cards_p90', 'mistakes_goals_p90', 'mistakes_chances_p90',
     'fouls_p90', 'actions_unsuccessful_p90',
 ]
 
@@ -86,39 +124,82 @@ DEFAULT_METRICS_WEIGHTS = {
     },
 }
 
-NEGATIVE_METRICS = [
-    'lost_balls_p90', 'lost_balls_own_half_p90', 'individual_ball_losses_p90',
-    'yellow_cards_p90', 'red_cards_p90', 'mistakes_goals_p90', 'mistakes_chances_p90',
-    'fouls_p90', 'actions_unsuccessful_p90',
-]
+# Добавляем в DEFAULT_METRICS_WEIGHTS все оставшиеся метрики с весом 0,
+# чтобы они были доступны в редакторе.
+for pos in DEFAULT_METRICS_WEIGHTS:
+    for m in ALL_POSSIBLE_METRICS:
+        if m not in DEFAULT_METRICS_WEIGHTS[pos]:
+            DEFAULT_METRICS_WEIGHTS[pos][m] = 0.0
 
 METRIC_NAMES_RU = {
-    'goals_p90': 'Голы', 'assists_p90': 'Голевые передачи', 'shots_p90': 'Удары',
-    'shots_on_target_p90': 'Удары в створ', 'key_passes_p90': 'Ключевые передачи',
-    'dribbles_p90': 'Обводки', 'dribbles_success_pct': 'Обводки успешные %',
-    'tackles_p90': 'Отборы', 'tackles_success_pct': 'Отборы успешные %',
-    'interceptions_p90': 'Перехваты', 'pass_accuracy': 'Точность передач %',
-    'passes_p90': 'Передачи', 'crosses_p90': 'Кроссы', 'crosses_accuracy': 'Кроссы точные %',
-    'xG_p90': 'xG (ожидаемые голы)', 'challenges_p90': 'Единоборства',
-    'challenges_won_pct': 'Единоборства выигранные %',
-    'air_challenges_p90': 'Верховые единоборства', 'air_challenges_won_pct': 'Верховые единоборства %',
-    'fouls_suffered_p90': 'Фолы на игроке', 'progressive_passes_p90': 'Продвигающие передачи',
-    'progressive_passes_accuracy': 'Продвигающие передачи точные %',
+    'goals_p90': 'Голы', 'assists_p90': 'Голевые передачи',
+    'shots_p90': 'Удары', 'shots_on_target_p90': 'Удары в створ',
+    'goals_by_head_p90': 'Голы головой',
+    'free_kick_shots_p90': 'Штрафные удары', 'free_kick_goals_p90': 'Голы со штрафных',
+    'shots_from_penalty_area_p90': 'Удары из штрафной',
+    'shots_on_target_penalty_area_p90': 'В створ из штрафной',
+    'shots_outside_penalty_area_p90': 'Удары из-за штрафной',
+    'shots_on_target_outside_penalty_area_p90': 'В створ из-за штрафной',
+    'headers_p90': 'Удары головой', 'headers_on_target_p90': 'Удары головой в створ',
+    'xG_p90': 'xG (ожидаемые голы)',
+    'key_passes_p90': 'Ключевые передачи', 'passes_p90': 'Передачи',
+    'pass_accuracy': 'Точность передач %',
+    'short_passes_p90': 'Короткие передачи', 'short_passes_accuracy': 'Короткие точные %',
+    'long_passes_p90': 'Длинные передачи', 'long_passes_accuracy': 'Длинные точные %',
+    'progressive_passes_p90': 'Продвигающие передачи',
+    'progressive_passes_accuracy': 'Продвигающие точные %',
     'passes_final_third_p90': 'Передачи в финальную треть',
-    'passes_final_third_accuracy': 'Передачи в финальную треть %',
-    'chances_p90': 'Голевые моменты', 'chances_successful_p90': 'Реализованные моменты',
-    'involvement_scoring_p90': 'Участие в голевых атаках',
+    'passes_final_third_accuracy': 'В финальную треть точные %',
+    'passes_into_penalty_box_p90': 'Передачи в штрафную',
+    'passes_into_penalty_box_accuracy': 'В штрафную точные %',
+    'super_long_passes_p90': 'Сверхдлинные передачи',
+    'super_long_passes_accuracy': 'Сверхдлинные точные %',
+    'crosses_p90': 'Кроссы', 'crosses_accuracy': 'Кроссы точные %',
+    'passes_for_shot_p90': 'Передачи под удар',
+    'dribbles_p90': 'Обводки', 'dribbles_success_pct': 'Обводки успешные %',
+    'dribbling_final_third_p90': 'Обводки в финальной трети',
+    'dribbling_final_third_success_pct': 'Обводки в финальной трети %',
+    'carry_p90': 'Продвижение мяча (Carry)',
+    'challenges_p90': 'Единоборства', 'challenges_won_pct': 'Единоборства выигранные %',
+    'defensive_challenges_p90': 'Оборонительные единоборства',
+    'defensive_challenges_won_pct': 'Оборонительные един. выигранные %',
+    'attacking_challenges_p90': 'Атакующие единоборства',
+    'attacking_challenges_won_pct': 'Атакующие един. выигранные %',
+    'air_challenges_p90': 'Верховые единоборства',
+    'air_challenges_won_pct': 'Верховые единоборства %',
+    'tackles_p90': 'Отборы', 'tackles_success_pct': 'Отборы успешные %',
+    'interceptions_p90': 'Перехваты',
+    'loose_ball_recoveries_p90': 'Подборы',
     'actions_opp_box_p90': 'Действия в штрафной соперника',
     'actions_opp_box_success_p90': 'Успешные действия в штрафной',
+    'chances_p90': 'Голевые моменты', 'chances_successful_p90': 'Реализованные моменты',
+    'chances_created_p90': 'Созданные моменты',
+    'involvement_scoring_p90': 'Участие в голевых атаках',
+    'shots_on_target_pct': 'Точность ударов %',
+    'lost_balls_p90': 'Потери мяча', 'lost_balls_own_half_p90': 'Потери на своей половине',
+    'individual_ball_losses_p90': 'Индивидуальные потери',
+    'lost_balls_after_passes_p90': 'Потери после передач',
+    'challenges_unsuccessful_p90': 'Неудачные единоборства',
+    'dribbles_unsuccessful_p90': 'Неудачные обводки',
+    'bad_ball_control_p90': 'Плохой приём мяча',
+    'offsides_p90': 'Офсайды',
+    'mistakes_goals_p90': 'Ошибки → голы', 'mistakes_chances_p90': 'Ошибки → моменты',
+    'fouls_p90': 'Фолы', 'fouls_suffered_p90': 'Фолы на игроке',
+    'yellow_cards_p90': 'Жёлтые карточки', 'red_cards_p90': 'Красные карточки',
+    'ball_recoveries_p90': 'Возвраты мяча',
+    'ball_recoveries_opp_half_p90': 'Возвраты на чужой половине',
+    'actions_successful_p90': 'Успешные действия',
+    'actions_unsuccessful_p90': 'Неуспешные действия',
     'final_third_entries_p90': 'Входы в финальную треть',
     'final_third_carry_p90': 'Входы в финальную треть (дриблинг)',
-    'ball_recoveries_p90': 'Возвраты мяча', 'ball_recoveries_opp_half_p90': 'Возвраты мяча на чужой половине',
-    'loose_ball_recoveries_p90': 'Подборы', 'actions_successful_p90': 'Успешные действия',
-    'lost_balls_p90': 'Потери мяча', 'lost_balls_own_half_p90': 'Потери на своей половине',
-    'individual_ball_losses_p90': 'Индивидуальные потери', 'yellow_cards_p90': 'Жёлтые карточки',
-    'red_cards_p90': 'Красные карточки', 'mistakes_goals_p90': 'Ошибки, приведшие к голам',
-    'mistakes_chances_p90': 'Ошибки, приведшие к моментам', 'fouls_p90': 'Фолы',
-    'actions_unsuccessful_p90': 'Неуспешные действия',
+    'final_third_entries_pass_p90': 'Входы в финальную треть (пас)',
+    'open_passes_received_p90': 'Открытые передачи принято',
+    'long_open_passes_received_p90': 'Длинные передачи принято',
+    'super_long_open_passes_received_p90': 'Сверхдлинные передачи принято',
+    'open_passes_received_first_third_p90': 'Принято в 1-й трети',
+    'open_passes_received_central_third_p90': 'Принято в центр. трети',
+    'open_passes_received_final_third_p90': 'Принято в финальной трети',
+    'open_passes_received_opponent_box_p90': 'Принято в штрафной',
 }
 
 # -------------------- БЕЗОПАСНОЕ ПОДКЛЮЧЕНИЕ К БД --------------------
@@ -176,44 +257,95 @@ def load_and_clean_data(uploaded_file_content):
     df = df.dropna(subset=['№'])
 
     rename_dict = {
-        'Player': 'player', 'Position': 'position', 'Minutes played': 'minutes',
-        'Goals': 'goals', 'Assists': 'assists', 'Shots': 'shots',
-        'Shots on target': 'shots_on_target', 'Key passes': 'key_passes',
-        'Dribbles': 'dribbles', 'Dribbles successful, %': 'dribbles_success_pct',
-        'Tackles': 'tackles', 'Tackles successful, %': 'tackles_success_pct',
-        'Interceptions': 'interceptions', 'Passes accurate, %': 'pass_accuracy',
-        'Passes': 'passes', 'Crosses': 'crosses', 'Crosses accurate, %': 'crosses_accuracy',
-        'xG (expected goals)': 'xG', 'Challenges': 'challenges',
-        'Challenges won, %': 'challenges_won_pct', 'Air challenges': 'air_challenges',
-        'Air challenges won, %': 'air_challenges_won_pct', 'Fouls': 'fouls',
-        'Fouls suffered': 'fouls_suffered', 'Yellow cards': 'yellow_cards',
-        'Red cards': 'red_cards', 'Loose ball recoveries': 'loose_ball_recoveries',
-        'Actions in opponent\'s box': 'actions_opp_box',
-        'Actions in opponent\'s box successful': 'actions_opp_box_success',
-        'Chances': 'chances', 'Chances successful': 'chances_successful',
-        'Involvement in scoring attacks': 'involvement_scoring',
+        'Player': 'player', 'Team': 'team', 'Position': 'position',
+        'Minutes played': 'minutes',
+        'Goals': 'goals', 'Assists': 'assists',
+        'Shots': 'shots', 'Shots on target': 'shots_on_target',
+        'Goals by head': 'goals_by_head',
+        'Free-kick shots': 'free_kick_shots', 'Free-kick goals': 'free_kick_goals',
+        'Shots from the penalty area': 'shots_from_penalty_area',
+        'Shots on target from the penalty area': 'shots_on_target_penalty_area',
+        'Shots from outside the penalty area': 'shots_outside_penalty_area',
+        'Shots on target from outside the penalty area': 'shots_on_target_outside_penalty_area',
+        'Headers': 'headers', 'Headers on target': 'headers_on_target',
+        'xG (expected goals)': 'xG',
+        'Key passes': 'key_passes', 'Passes': 'passes',
+        'Passes accurate, %': 'pass_accuracy',
+        'Short passes': 'short_passes',
+        'Short passes accurate, %': 'short_passes_accuracy',
+        'Long passes': 'long_passes',
+        'Long passes accurate, %': 'long_passes_accuracy',
         'Progressive passes': 'progressive_passes',
         'Progressive passes accurate, %': 'progressive_passes_accuracy',
         'Passes forward to the final third': 'passes_final_third',
         'Passes forward to the final third accurate, %': 'passes_final_third_accuracy',
-        'Final third entries': 'final_third_entries',
-        'Final third entries through carry': 'final_third_carry',
-        'Lost balls': 'lost_balls', 'Lost balls in own half': 'lost_balls_own_half',
+        'Passes into the penalty box': 'passes_into_penalty_box',
+        'Passes into the penalty box accurate, %': 'passes_into_penalty_box_accuracy',
+        'Super long passes': 'super_long_passes',
+        'Super long passes accurate, %': 'super_long_passes_accuracy',
+        'Crosses': 'crosses', 'Crosses accurate, %': 'crosses_accuracy',
+        'Passes for a shot': 'passes_for_shot',
+        'Dribbles': 'dribbles', 'Dribbles successful, %': 'dribbles_success_pct',
+        'Dribbling in the final third': 'dribbling_final_third',
+        'Dribbling in the final third successful, %': 'dribbling_final_third_success_pct',
+        'Carry': 'carry',
+        'Challenges': 'challenges', 'Challenges won, %': 'challenges_won_pct',
+        'Defensive challenges': 'defensive_challenges',
+        'Defensive challenges won, %': 'defensive_challenges_won_pct',
+        'Attacking challenges': 'attacking_challenges',
+        'Attacking challenges won, %': 'attacking_challenges_won_pct',
+        'Air challenges': 'air_challenges',
+        'Air challenges won, %': 'air_challenges_won_pct',
+        'Tackles': 'tackles', 'Tackles successful, %': 'tackles_success_pct',
+        'Interceptions': 'interceptions',
+        'Loose ball recoveries': 'loose_ball_recoveries',
+        'Actions in opponent\'s box': 'actions_opp_box',
+        'Actions in opponent\'s box successful': 'actions_opp_box_success',
+        'Chances': 'chances', 'Chances successful': 'chances_successful',
+        'Chances created': 'chances_created',
+        'Involvement in scoring attacks': 'involvement_scoring',
+        'Shots on target, %': 'shots_on_target_pct',
+        'Lost balls': 'lost_balls',
+        'Lost balls in own half': 'lost_balls_own_half',
         'Individual ball losses': 'individual_ball_losses',
-        'Ball recoveries': 'ball_recoveries',
-        'Ball recoveries in opponent\'s half': 'ball_recoveries_opp_half',
-        'Matches played': 'matches_played', 'Starting lineup appearances': 'starting_lineup',
+        'Lost balls after passes': 'lost_balls_after_passes',
+        'Challenges unsuccessful': 'challenges_unsuccessful',
+        'Dribbles unsuccessful': 'dribbles_unsuccessful',
+        'Bad ball control': 'bad_ball_control',
+        'Offsides': 'offsides',
         'Mistakes leading to goals': 'mistakes_goals',
         'Mistakes leading to chances': 'mistakes_chances',
+        'Fouls': 'fouls', 'Fouls suffered': 'fouls_suffered',
+        'Yellow cards': 'yellow_cards', 'Red cards': 'red_cards',
+        'Ball recoveries': 'ball_recoveries',
+        'Ball recoveries in opponent\'s half': 'ball_recoveries_opp_half',
         'Actions': 'actions', 'Actions successful': 'actions_successful',
         'Actions unsuccessful': 'actions_unsuccessful',
+        'Final third entries': 'final_third_entries',
+        'Final third entries through carry': 'final_third_carry',
+        'Final third entries through pass': 'final_third_entries_pass',
+        'Matches played': 'matches_played',
+        'Starting lineup appearances': 'starting_lineup',
+        'Open passes received': 'open_passes_received',
+        'Long open passes received': 'long_open_passes_received',
+        'Super long open passes received': 'super_long_open_passes_received',
+        'Open passes received in the first third': 'open_passes_received_first_third',
+        'Open passes received in the central third': 'open_passes_received_central_third',
+        'Open passes received in the final third': 'open_passes_received_final_third',
+        'Open passes received in the opponent\'s box': 'open_passes_received_opponent_box',
     }
     existing_renames = {k: v for k, v in rename_dict.items() if k in df.columns}
     df = df.rename(columns=existing_renames)
 
-    pct_columns = ['pass_accuracy', 'dribbles_success_pct', 'tackles_success_pct',
-                   'crosses_accuracy', 'challenges_won_pct', 'air_challenges_won_pct',
-                   'progressive_passes_accuracy', 'passes_final_third_accuracy']
+    pct_columns = [
+        'pass_accuracy', 'dribbles_success_pct', 'tackles_success_pct',
+        'crosses_accuracy', 'challenges_won_pct', 'air_challenges_won_pct',
+        'progressive_passes_accuracy', 'passes_final_third_accuracy',
+        'short_passes_accuracy', 'long_passes_accuracy',
+        'passes_into_penalty_box_accuracy', 'super_long_passes_accuracy',
+        'dribbling_final_third_success_pct', 'defensive_challenges_won_pct',
+        'attacking_challenges_won_pct', 'shots_on_target_pct',
+    ]
     for col in pct_columns:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -222,18 +354,34 @@ def load_and_clean_data(uploaded_file_content):
 
     minutes = pd.to_numeric(df['minutes'], errors='coerce').fillna(0)
     stats_to_normalize = [
-        'goals', 'assists', 'shots', 'shots_on_target', 'key_passes',
-        'dribbles', 'tackles', 'interceptions', 'challenges',
-        'air_challenges', 'crosses', 'progressive_passes', 'passes_final_third',
-        'chances', 'chances_successful', 'involvement_scoring',
-        'actions_opp_box', 'actions_opp_box_success',
-        'final_third_entries', 'final_third_carry',
+        'goals', 'assists', 'shots', 'shots_on_target',
+        'goals_by_head', 'free_kick_shots', 'free_kick_goals',
+        'shots_from_penalty_area', 'shots_on_target_penalty_area',
+        'shots_outside_penalty_area', 'shots_on_target_outside_penalty_area',
+        'headers', 'headers_on_target',
+        'xG', 'key_passes', 'passes',
+        'short_passes', 'long_passes',
+        'progressive_passes', 'passes_final_third',
+        'passes_into_penalty_box', 'super_long_passes',
+        'crosses', 'passes_for_shot',
+        'dribbles', 'dribbling_final_third', 'carry',
+        'challenges', 'defensive_challenges', 'attacking_challenges',
+        'air_challenges', 'tackles', 'interceptions',
+        'loose_ball_recoveries', 'actions_opp_box', 'actions_opp_box_success',
+        'chances', 'chances_successful', 'chances_created',
+        'involvement_scoring',
         'lost_balls', 'lost_balls_own_half', 'individual_ball_losses',
+        'lost_balls_after_passes', 'challenges_unsuccessful',
+        'dribbles_unsuccessful', 'bad_ball_control', 'offsides',
+        'mistakes_goals', 'mistakes_chances',
+        'fouls', 'fouls_suffered', 'yellow_cards', 'red_cards',
         'ball_recoveries', 'ball_recoveries_opp_half',
-        'loose_ball_recoveries', 'fouls', 'fouls_suffered',
-        'yellow_cards', 'red_cards', 'mistakes_goals', 'mistakes_chances',
         'actions', 'actions_successful', 'actions_unsuccessful',
-        'passes', 'xG'
+        'final_third_entries', 'final_third_carry', 'final_third_entries_pass',
+        'open_passes_received', 'long_open_passes_received',
+        'super_long_open_passes_received',
+        'open_passes_received_first_third', 'open_passes_received_central_third',
+        'open_passes_received_final_third', 'open_passes_received_opponent_box',
     ]
     for col in stats_to_normalize:
         if col in df.columns:
@@ -283,10 +431,8 @@ def calculate_ratings(df, position_weights):
         weights = position_weights.get(pos, {})
         if not weights:
             return 50.0
-        pos_sum = 0.0
-        pos_weight_sum = 0.0
-        neg_sum = 0.0
-        neg_weight_sum = 0.0
+        pos_sum = 0.0; pos_weight_sum = 0.0
+        neg_sum = 0.0; neg_weight_sum = 0.0
         for m, w in weights.items():
             if w == 0 or m not in valid_metrics:
                 continue
@@ -317,6 +463,13 @@ def format_metric_with_detail(metric, value, player_row):
         elif metric == 'crosses_accuracy': base_col = 'crosses'
         elif metric == 'progressive_passes_accuracy': base_col = 'progressive_passes'
         elif metric == 'passes_final_third_accuracy': base_col = 'passes_final_third'
+        elif metric == 'short_passes_accuracy': base_col = 'short_passes'
+        elif metric == 'long_passes_accuracy': base_col = 'long_passes'
+        elif metric == 'passes_into_penalty_box_accuracy': base_col = 'passes_into_penalty_box'
+        elif metric == 'super_long_passes_accuracy': base_col = 'super_long_passes'
+        elif metric == 'dribbling_final_third_success_pct': base_col = 'dribbling_final_third'
+        elif metric == 'defensive_challenges_won_pct': base_col = 'defensive_challenges'
+        elif metric == 'attacking_challenges_won_pct': base_col = 'attacking_challenges'
         if base_col and base_col in player_row:
             total = player_row[base_col]
             if pd.notna(total) and total > 0:
@@ -417,23 +570,48 @@ def load_from_db(league_names, seasons, teams=None):
         p.name AS player, p.position,
         ps.minutes_played AS minutes,
         ps.goals, ps.assists, ps.shots, ps.shots_on_target,
-        ps.key_passes, ps.dribbles, ps.dribbles_success_pct,
-        ps.tackles, ps.tackles_success_pct, ps.interceptions,
-        ps.pass_accuracy, ps.passes, ps.crosses, ps.crosses_accuracy,
-        ps.xG, ps.challenges, ps.challenges_won_pct,
+        ps.goals_by_head, ps.free_kick_shots, ps.free_kick_goals,
+        ps.shots_from_penalty_area, ps.shots_on_target_penalty_area,
+        ps.shots_outside_penalty_area, ps.shots_on_target_outside_penalty_area,
+        ps.headers, ps.headers_on_target,
+        ps.xG,
+        ps.key_passes, ps.passes, ps.pass_accuracy,
+        ps.short_passes, ps.short_passes_accuracy,
+        ps.long_passes, ps.long_passes_accuracy,
+        ps.progressive_passes, ps.progressive_passes_accuracy,
+        ps.passes_final_third, ps.passes_final_third_accuracy,
+        ps.passes_into_penalty_box, ps.passes_into_penalty_box_accuracy,
+        ps.super_long_passes, ps.super_long_passes_accuracy,
+        ps.crosses, ps.crosses_accuracy,
+        ps.passes_for_shot,
+        ps.dribbles, ps.dribbles_success_pct,
+        ps.dribbling_final_third, ps.dribbling_final_third_success_pct,
+        ps.carry,
+        ps.challenges, ps.challenges_won_pct,
+        ps.defensive_challenges, ps.defensive_challenges_won_pct,
+        ps.attacking_challenges, ps.attacking_challenges_won_pct,
         ps.air_challenges, ps.air_challenges_won_pct,
-        ps.fouls_suffered, ps.progressive_passes,
-        ps.progressive_passes_accuracy, ps.passes_final_third,
-        ps.passes_final_third_accuracy, ps.chances,
-        ps.chances_successful, ps.involvement_scoring,
+        ps.tackles, ps.tackles_success_pct,
+        ps.interceptions,
+        ps.loose_ball_recoveries,
         ps.actions_opp_box, ps.actions_opp_box_success,
-        ps.final_third_entries, ps.final_third_carry,
+        ps.chances, ps.chances_successful, ps.chances_created,
+        ps.involvement_scoring,
+        ps.shots_on_target_pct,
+        ps.lost_balls, ps.lost_balls_own_half, ps.individual_ball_losses,
+        ps.lost_balls_after_passes,
+        ps.challenges_unsuccessful, ps.dribbles_unsuccessful,
+        ps.bad_ball_control, ps.offsides,
+        ps.mistakes_goals, ps.mistakes_chances,
+        ps.fouls, ps.fouls_suffered,
+        ps.yellow_cards, ps.red_cards,
         ps.ball_recoveries, ps.ball_recoveries_opp_half,
-        ps.loose_ball_recoveries, ps.actions_successful,
-        ps.lost_balls, ps.lost_balls_own_half,
-        ps.individual_ball_losses, ps.yellow_cards,
-        ps.red_cards, ps.mistakes_goals, ps.mistakes_chances,
-        ps.fouls, ps.actions_unsuccessful, ps.actions,
+        ps.actions_successful, ps.actions_unsuccessful, ps.actions,
+        ps.final_third_entries, ps.final_third_carry, ps.final_third_entries_pass,
+        ps.open_passes_received, ps.long_open_passes_received,
+        ps.super_long_open_passes_received,
+        ps.open_passes_received_first_third, ps.open_passes_received_central_third,
+        ps.open_passes_received_final_third, ps.open_passes_received_opponent_box,
         ps.matches_played, ps.starting_lineup,
         t.name AS team, l.name AS league
     FROM player_stats ps
@@ -451,9 +629,15 @@ def load_from_db(league_names, seasons, teams=None):
 
     df = df[~df['position'].str.upper().str.contains('GK', na=False)]
 
-    pct_cols = ['pass_accuracy', 'dribbles_success_pct', 'tackles_success_pct',
-                'crosses_accuracy', 'challenges_won_pct', 'air_challenges_won_pct',
-                'progressive_passes_accuracy', 'passes_final_third_accuracy']
+    pct_cols = [
+        'pass_accuracy', 'dribbles_success_pct', 'tackles_success_pct',
+        'crosses_accuracy', 'challenges_won_pct', 'air_challenges_won_pct',
+        'progressive_passes_accuracy', 'passes_final_third_accuracy',
+        'short_passes_accuracy', 'long_passes_accuracy',
+        'passes_into_penalty_box_accuracy', 'super_long_passes_accuracy',
+        'dribbling_final_third_success_pct', 'defensive_challenges_won_pct',
+        'attacking_challenges_won_pct', 'shots_on_target_pct',
+    ]
     for col in pct_cols:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -462,18 +646,34 @@ def load_from_db(league_names, seasons, teams=None):
 
     minutes = pd.to_numeric(df['minutes'], errors='coerce').fillna(0)
     stats_to_norm = [
-        'goals', 'assists', 'shots', 'shots_on_target', 'key_passes',
-        'dribbles', 'tackles', 'interceptions', 'challenges',
-        'air_challenges', 'crosses', 'progressive_passes', 'passes_final_third',
-        'chances', 'chances_successful', 'involvement_scoring',
-        'actions_opp_box', 'actions_opp_box_success',
-        'final_third_entries', 'final_third_carry',
+        'goals', 'assists', 'shots', 'shots_on_target',
+        'goals_by_head', 'free_kick_shots', 'free_kick_goals',
+        'shots_from_penalty_area', 'shots_on_target_penalty_area',
+        'shots_outside_penalty_area', 'shots_on_target_outside_penalty_area',
+        'headers', 'headers_on_target',
+        'xG', 'key_passes', 'passes',
+        'short_passes', 'long_passes',
+        'progressive_passes', 'passes_final_third',
+        'passes_into_penalty_box', 'super_long_passes',
+        'crosses', 'passes_for_shot',
+        'dribbles', 'dribbling_final_third', 'carry',
+        'challenges', 'defensive_challenges', 'attacking_challenges',
+        'air_challenges', 'tackles', 'interceptions',
+        'loose_ball_recoveries', 'actions_opp_box', 'actions_opp_box_success',
+        'chances', 'chances_successful', 'chances_created',
+        'involvement_scoring',
         'lost_balls', 'lost_balls_own_half', 'individual_ball_losses',
+        'lost_balls_after_passes', 'challenges_unsuccessful',
+        'dribbles_unsuccessful', 'bad_ball_control', 'offsides',
+        'mistakes_goals', 'mistakes_chances',
+        'fouls', 'fouls_suffered', 'yellow_cards', 'red_cards',
         'ball_recoveries', 'ball_recoveries_opp_half',
-        'loose_ball_recoveries', 'fouls', 'fouls_suffered',
-        'yellow_cards', 'red_cards', 'mistakes_goals', 'mistakes_chances',
         'actions', 'actions_successful', 'actions_unsuccessful',
-        'passes', 'xG'
+        'final_third_entries', 'final_third_carry', 'final_third_entries_pass',
+        'open_passes_received', 'long_open_passes_received',
+        'super_long_open_passes_received',
+        'open_passes_received_first_third', 'open_passes_received_central_third',
+        'open_passes_received_final_third', 'open_passes_received_opponent_box',
     ]
     for col in stats_to_norm:
         if col in df.columns:
@@ -595,8 +795,8 @@ def add_average_trace(fig, radar_metrics, avg_values, labels, full_df):
         theta=labels + labels[:1],
         fill='toself',
         name='Средние',
-        line=dict(color='gray', dash='dash'),
-        opacity=0.3,
+        line=dict(color='#333333', dash='dash'),
+        opacity=0.4,
     ))
 
 def create_player_radar_figure(player_row, df, position_weights, avg_values=None):
@@ -624,8 +824,8 @@ def create_player_radar_figure(player_row, df, position_weights, avg_values=None
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
-        height=450, width=450,
-        margin=dict(l=120, r=120, t=120, b=120),
+        height=600, width=600,
+        margin=dict(l=120, r=120, t=80, b=120),
     )
     return fig
 
@@ -657,8 +857,8 @@ def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
-        height=500, width=500,
-        margin=dict(l=120, r=120, t=120, b=120),
+        height=650, width=650,
+        margin=dict(l=120, r=120, t=80, b=120),
         title="Сравнение игроков",
     )
     return fig
@@ -684,8 +884,8 @@ def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
-        height=800, width=750,
-        margin=dict(l=120, r=120, t=120, b=120),
+        height=900, width=900,
+        margin=dict(l=120, r=120, t=80, b=120),
         title="Сравнение по позиции",
     )
     return fig
@@ -847,7 +1047,8 @@ with st.sidebar:
     if avg_source == "Лига из БД":
         avg_league = st.selectbox("Лига для средних", get_leagues(), key="avg_league")
         if avg_league:
-            avg_season = st.selectbox("Сезон для средних", get_seasons_for_leagues([avg_league]), key="avg_season")
+            avg_seasons = get_seasons_for_leagues([avg_league])
+            avg_season = st.selectbox("Сезон для средних", avg_seasons, key="avg_season") if avg_seasons else None
         else:
             avg_season = None
     else:
