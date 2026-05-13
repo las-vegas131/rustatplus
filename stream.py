@@ -546,7 +546,7 @@ def load_from_db(league_names, seasons, teams=None):
 
 # -------------------- ИМПОРТ СЕЗОННОГО EXCEL --------------------
 RENAME_DICT_IMPORT = {
-    'Player': 'player', 'Team': 'team', 'Position': 'position',
+    'Player': 'player', 'Position': 'position',
     'Minutes played': 'minutes_played',
     'Goals': 'goals', 'Assists': 'assists',
     'Shots': 'shots', 'Shots on target': 'shots_on_target',
@@ -620,7 +620,7 @@ RENAME_DICT_IMPORT = {
     'Open passes received in the opponent\'s box': 'open_passes_received_opponent_box',
 }
 
-STATS_FIELDS_SEASON = [v for k, v in RENAME_DICT_IMPORT.items() if k not in ['Player', 'Team', 'Position']]
+STATS_FIELDS_SEASON = [v for k, v in RENAME_DICT_IMPORT.items() if k not in ['Player', 'Position', 'Team']]
 
 def clean_value(v):
     if pd.isna(v) or str(v).strip() in ('', '-'):
@@ -704,7 +704,7 @@ def import_season_excel(uploaded_file_content, league_name, season, team_column=
     conn.close()
     return inserted
 
-def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label, which_team='both', team_column='Team'):
+def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label, which_team='home', team_column='Team'):
     try:
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
     except ValueError:
@@ -753,8 +753,8 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
 
     cur.execute("""
         SELECT id FROM matches 
-        WHERE season = %s AND league_id = %s AND home_team_id = %s AND away_team_id = %s AND label = %s
-    """, (season, league_id, home_id, away_id, label))
+        WHERE season = %s AND league_id = %s AND home_team_id = %s AND away_team_id = %s AND (label = %s OR (label IS NULL AND %s IS NULL))
+    """, (season, league_id, home_id, away_id, label, label))
     match_row = cur.fetchone()
     if match_row:
         match_id = match_row[0]
@@ -1203,6 +1203,17 @@ with st.sidebar:
     st.header("📤 Импорт Excel")
     uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
     if uploaded_file:
+        # Определяем колонки файла, чтобы дать пользователю выбрать колонку команды
+        try:
+            df_head = pd.read_excel(io.BytesIO(uploaded_file.getvalue()), nrows=0)
+            columns = df_head.columns.tolist()
+        except Exception:
+            columns = []
+        if columns:
+            team_col = st.selectbox("Колонка с командой", columns, index=0, key="team_column_select")
+        else:
+            team_col = 'Team'  # fallback, если не удалось прочитать колонки
+
         import_type = st.radio("Тип данных", ["Сезон", "Матч"], key="import_type")
         if import_type == "Сезон":
             existing_leagues = get_leagues()
@@ -1216,7 +1227,7 @@ with st.sidebar:
                         st.error("Введите название сезона")
                     else:
                         with st.spinner("Импорт сезона..."):
-                            cnt = import_season_excel(uploaded_file.getvalue(), import_league.strip(), import_season.strip())
+                            cnt = import_season_excel(uploaded_file.getvalue(), import_league.strip(), import_season.strip(), team_column=team_col)
                             if cnt:
                                 st.success(f"Импортировано {cnt} игроков")
                             else:
@@ -1227,6 +1238,12 @@ with st.sidebar:
                 st.error("Нет доступных лиг в БД.")
             else:
                 match_league = st.selectbox("Лига", existing_leagues, key="match_league_select")
+                seasons_in_league = get_seasons_for_leagues([match_league])
+                if not seasons_in_league:
+                    st.warning("В выбранной лиге нет сезонов.")
+                    match_season = None
+                else:
+                    match_season = st.selectbox("Сезон", seasons_in_league, key="match_season_select")
                 teams_in_league = get_teams_for_league(match_league)
                 if not teams_in_league:
                     st.error("В выбранной лиге нет команд.")
@@ -1234,25 +1251,21 @@ with st.sidebar:
                     home_team = st.selectbox("Домашняя команда", teams_in_league, key="home_team_select")
                     away_team = st.selectbox("Гостевая команда", teams_in_league, key="away_team_select")
 
-                    match_season = st.text_input("Сезон (например, 2024/2025)", key="match_season")
-                    team_to_load = st.radio("Какую команду загружаем?", ["Обе", "Только хозяев", "Только гостей"], key="match_team_load")
+                    team_to_load = st.radio("Какую команду загружаем?", ["Только хозяев", "Только гостей"], key="match_team_load")
                     match_date = st.date_input("Дата матча", value=None, key="match_date")
-                    match_label = st.text_input("Метка матча (например, Финал)", key="match_label")
+                    match_label = st.text_input("Метка матча (необязательно)", key="match_label")
                     if st.button("Загрузить матч в БД", use_container_width=True):
-                        if not all([match_season.strip(), match_label.strip()]):
-                            st.error("Заполните сезон и метку матча")
+                        if not match_season:
+                            st.error("Сезон не выбран")
                         else:
                             with st.spinner("Импорт матча..."):
-                                team_arg = 'both'
-                                if team_to_load == "Только хозяев":
-                                    team_arg = 'home'
-                                elif team_to_load == "Только гостей":
-                                    team_arg = 'away'
+                                team_arg = 'home' if team_to_load == "Только хозяев" else 'away'
                                 try:
                                     mid = import_match_excel(uploaded_file.getvalue(), match_league.strip(), match_season.strip(),
                                                             home_team.strip(), away_team.strip(),
-                                                            match_date, match_label.strip(),
-                                                            which_team=team_arg)
+                                                            match_date, match_label.strip() if match_label else None,
+                                                            which_team=team_arg,
+                                                            team_column=team_col)
                                     if mid:
                                         st.success(f"Матч #{mid} загружен")
                                     else:
@@ -1315,28 +1328,18 @@ with st.sidebar:
             match_info = next(m for m in matches if m[0] == match_id)
             home_team = match_info[4]
             away_team = match_info[5]
-            team_choice = st.radio("Команда", ["Обе", home_team, away_team], key="match_team_choice")
+            team_choice = st.radio("Команда", [home_team, away_team], key="match_team_choice")
             if st.button("Загрузить матч", use_container_width=True):
                 with st.spinner("Загрузка матча..."):
                     team_ids = None
-                    if team_choice == home_team:
-                        conn = psycopg2.connect(**get_db_config())
-                        cur = conn.cursor()
-                        cur.execute("SELECT id FROM teams WHERE name = %s", (home_team,))
-                        tid = cur.fetchone()
-                        if tid:
-                            team_ids = [tid[0]]
-                        cur.close()
-                        conn.close()
-                    elif team_choice == away_team:
-                        conn = psycopg2.connect(**get_db_config())
-                        cur = conn.cursor()
-                        cur.execute("SELECT id FROM teams WHERE name = %s", (away_team,))
-                        tid = cur.fetchone()
-                        if tid:
-                            team_ids = [tid[0]]
-                        cur.close()
-                        conn.close()
+                    conn = psycopg2.connect(**get_db_config())
+                    cur = conn.cursor()
+                    cur.execute("SELECT id FROM teams WHERE name = %s", (team_choice,))
+                    tid = cur.fetchone()
+                    if tid:
+                        team_ids = [tid[0]]
+                    cur.close()
+                    conn.close()
                     df_match = load_match_stats(match_id, team_ids)
                     if df_match.empty:
                         st.error("Нет данных")
