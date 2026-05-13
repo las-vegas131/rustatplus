@@ -12,6 +12,7 @@ import warnings
 import psycopg2
 from dotenv import load_dotenv
 import plotly.graph_objects as go
+from datetime import date
 
 warnings.filterwarnings('ignore')
 load_dotenv()
@@ -263,11 +264,10 @@ def minmax_normalize(series):
     return (s - min_val) / (max_val - min_val)
 
 @st.cache_data
-def calculate_ratings(df, position_weights):
-    league_col = 'league' if 'league' in df.columns else None
-    if league_col:
+def calculate_ratings(df, position_weights, league_col='league'):
+    if league_col in df.columns:
         result_dfs = []
-        for league_name, group_df in df.groupby(league_col):
+        for _, group_df in df.groupby(league_col):
             rated = _calculate_ratings_for_group(group_df, position_weights)
             result_dfs.append(rated)
         return pd.concat(result_dfs, ignore_index=True)
@@ -309,8 +309,7 @@ def _calculate_ratings_for_group(df, position_weights):
                     pos_weight_sum += w
         pos_score = pos_sum / pos_weight_sum if pos_weight_sum > 0 else 0.5
         neg_score = neg_sum / neg_weight_sum if neg_weight_sum > 0 else 0.5
-        rating = 100 * (pos_score + neg_score) / 2
-        return rating
+        return 100 * (pos_score + neg_score) / 2
 
     df['rating'] = df.apply(calc_row, axis=1).round(1)
     return df
@@ -425,7 +424,7 @@ def build_main_table(df, selected_metrics):
         main_data.append(row_data)
     return pd.DataFrame(main_data, columns=main_headers)
 
-# -------------------- ЗАГРУЗКА ИЗ БД --------------------
+# -------------------- ЗАГРУЗКА СЕЗОННОЙ СТАТИСТИКИ ИЗ БД --------------------
 def load_from_db(league_names, seasons, teams=None):
     conn = psycopg2.connect(**get_db_config())
     query = """
@@ -545,7 +544,7 @@ def load_from_db(league_names, seasons, teams=None):
 
     return df
 
-# -------------------- ИМПОРТ EXCEL В БД --------------------
+# -------------------- ИМПОРТ СЕЗОННОГО EXCEL --------------------
 RENAME_DICT_IMPORT = {
     'Player': 'player', 'Team': 'team', 'Position': 'position',
     'Minutes played': 'minutes_played',
@@ -621,10 +620,7 @@ RENAME_DICT_IMPORT = {
     'Open passes received in the opponent\'s box': 'open_passes_received_opponent_box',
 }
 
-STATS_FIELDS = list(RENAME_DICT_IMPORT.values())
-STATS_FIELDS.remove('player')
-STATS_FIELDS.remove('team')
-STATS_FIELDS.remove('position')
+STATS_FIELDS_SEASON = [v for k, v in RENAME_DICT_IMPORT.items() if k not in ['Player', 'Team', 'Position']]
 
 def clean_value(v):
     if pd.isna(v) or str(v).strip() in ('', '-'):
@@ -634,7 +630,7 @@ def clean_value(v):
     except (ValueError, TypeError):
         return None
 
-def import_excel_to_db(uploaded_file_content, league_name, season):
+def import_season_excel(uploaded_file_content, league_name, season):
     try:
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
     except ValueError:
@@ -661,7 +657,6 @@ def import_excel_to_db(uploaded_file_content, league_name, season):
         team_name = row['team']
         pos = row['position'] if pd.notna(row['position']) else ''
 
-        # Команда
         cur.execute("SELECT id FROM teams WHERE name = %s AND league_id = %s", (team_name, league_id))
         team_row = cur.fetchone()
         if team_row:
@@ -670,7 +665,6 @@ def import_excel_to_db(uploaded_file_content, league_name, season):
             cur.execute("INSERT INTO teams (name, league_id) VALUES (%s, %s) RETURNING id", (team_name, league_id))
             team_id = cur.fetchone()[0]
 
-        # Игрок
         cur.execute("SELECT id FROM players WHERE name = %s", (player,))
         player_row = cur.fetchone()
         if player_row:
@@ -679,12 +673,11 @@ def import_excel_to_db(uploaded_file_content, league_name, season):
             cur.execute("INSERT INTO players (name, position) VALUES (%s, %s) RETURNING id", (player, pos))
             player_id = cur.fetchone()[0]
 
-        # Статистика
-        stats_values = [clean_value(row.get(f, None)) for f in STATS_FIELDS]
+        stats_values = [clean_value(row.get(f, None)) for f in STATS_FIELDS_SEASON]
 
-        columns = ['player_id', 'team_id', 'season'] + STATS_FIELDS
+        columns = ['player_id', 'team_id', 'season'] + STATS_FIELDS_SEASON
         placeholders = ['%s'] * len(columns)
-        update_set = ', '.join([f"{col} = EXCLUDED.{col}" for col in STATS_FIELDS])
+        update_set = ', '.join([f"{col} = EXCLUDED.{col}" for col in STATS_FIELDS_SEASON])
 
         sql = f"""
             INSERT INTO player_stats ({', '.join(columns)})
@@ -697,6 +690,88 @@ def import_excel_to_db(uploaded_file_content, league_name, season):
     cur.close()
     conn.close()
     return inserted
+
+# -------------------- ИМПОРТ МАТЧА --------------------
+def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label):
+    try:
+        df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
+    except ValueError:
+        xls = pd.ExcelFile(io.BytesIO(uploaded_file_content))
+        first_sheet = xls.sheet_names[0]
+        df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name=first_sheet, header=0)
+    df = df.dropna(subset=['№'])
+    existing_renames = {k: v for k, v in RENAME_DICT_IMPORT.items() if k in df.columns}
+    df = df.rename(columns=existing_renames)
+    df = df[~df['position'].str.upper().str.contains('GK', na=False)]
+
+    conn = psycopg2.connect(**get_db_config())
+    conn.autocommit = True
+    cur = conn.cursor()
+
+    # Лига
+    cur.execute("INSERT INTO leagues (name) VALUES (%s) ON CONFLICT (name) DO NOTHING", (league_name,))
+    cur.execute("SELECT id FROM leagues WHERE name = %s", (league_name,))
+    league_id = cur.fetchone()[0]
+
+    def get_or_create_team(name):
+        cur.execute("SELECT id FROM teams WHERE name = %s AND league_id = %s", (name, league_id))
+        row = cur.fetchone()
+        if row:
+            return row[0]
+        cur.execute("INSERT INTO teams (name, league_id) VALUES (%s, %s) RETURNING id", (name, league_id))
+        return cur.fetchone()[0]
+
+    home_id = get_or_create_team(home_team)
+    away_id = get_or_create_team(away_team)
+
+    # Создаём матч
+    cur.execute("""
+        INSERT INTO matches (season, league_id, home_team_id, away_team_id, match_date, label)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT DO NOTHING
+        RETURNING id
+    """, (season, league_id, home_id, away_id, match_date, label))
+    match_row = cur.fetchone()
+    if match_row:
+        match_id = match_row[0]
+    else:
+        cur.execute("SELECT id FROM matches WHERE season=%s AND league_id=%s AND home_team_id=%s AND away_team_id=%s AND label=%s",
+                    (season, league_id, home_id, away_id, label))
+        match_id = cur.fetchone()[0]
+
+    stats_fields_match = [f for f in STATS_FIELDS_SEASON if f != 'season']
+
+    for _, row in df.iterrows():
+        player_name = row['player']
+        team_name = row['team']
+        pos = row['position'] if pd.notna(row['position']) else ''
+
+        cur.execute("SELECT id FROM players WHERE name = %s", (player_name,))
+        player_row = cur.fetchone()
+        if player_row:
+            player_id = player_row[0]
+        else:
+            cur.execute("INSERT INTO players (name, position) VALUES (%s, %s) RETURNING id", (player_name, pos))
+            player_id = cur.fetchone()[0]
+
+        team_id = get_or_create_team(team_name)
+        stats_values = [clean_value(row.get(f, None)) for f in stats_fields_match]
+
+        columns = ['match_id', 'player_id', 'team_id'] + stats_fields_match
+        placeholders = ['%s'] * len(columns)
+        update_set = ', '.join([f"{col} = EXCLUDED.{col}" for col in stats_fields_match])
+
+        sql = f"""
+            INSERT INTO match_player_stats ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+            ON CONFLICT (match_id, player_id) DO UPDATE SET {update_set}
+        """
+        cur.execute(sql, [match_id, player_id, team_id] + stats_values)
+
+    cur.close()
+    conn.close()
+    return match_id
+
 # -------------------- ДИНАМИЧЕСКАЯ ЗАГРУЗКА СПИСКОВ --------------------
 @st.cache_data(ttl=60)
 def get_leagues():
@@ -754,6 +829,145 @@ def get_teams_for_leagues_seasons(league_names, seasons):
         return teams
     except:
         return []
+
+@st.cache_data(ttl=60)
+def get_matches():
+    try:
+        conn = psycopg2.connect(**get_db_config())
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT m.id, m.label, l.name AS league, m.season,
+                   ht.name AS home, at.name AS away, m.match_date
+            FROM matches m
+            JOIN leagues l ON m.league_id = l.id
+            JOIN teams ht ON m.home_team_id = ht.id
+            JOIN teams at ON m.away_team_id = at.id
+            ORDER BY m.match_date DESC, m.id DESC
+        """)
+        matches = cur.fetchall()
+        cur.close()
+        conn.close()
+        return matches
+    except:
+        return []
+
+@st.cache_data(ttl=60)
+def load_match_stats(match_id, team_ids=None):
+    conn = psycopg2.connect(**get_db_config())
+    query = """
+    SELECT 
+        p.name AS player, p.position,
+        mps.minutes_played AS minutes,
+        mps.goals, mps.assists, mps.shots, mps.shots_on_target,
+        mps.goals_by_head, mps.free_kick_shots, mps.free_kick_goals,
+        mps.shots_from_penalty_area, mps.shots_on_target_penalty_area,
+        mps.shots_outside_penalty_area, mps.shots_on_target_outside_penalty_area,
+        mps.headers, mps.headers_on_target,
+        mps.xG,
+        mps.key_passes, mps.passes, mps.pass_accuracy,
+        mps.short_passes, mps.short_passes_accuracy,
+        mps.long_passes, mps.long_passes_accuracy,
+        mps.progressive_passes, mps.progressive_passes_accuracy,
+        mps.passes_final_third, mps.passes_final_third_accuracy,
+        mps.passes_into_penalty_box, mps.passes_into_penalty_box_accuracy,
+        mps.super_long_passes, mps.super_long_passes_accuracy,
+        mps.crosses, mps.crosses_accuracy,
+        mps.passes_for_shot,
+        mps.dribbles, mps.dribbles_success_pct,
+        mps.dribbling_final_third, mps.dribbling_final_third_success_pct,
+        mps.carry,
+        mps.challenges, mps.challenges_won_pct,
+        mps.defensive_challenges, mps.defensive_challenges_won_pct,
+        mps.attacking_challenges, mps.attacking_challenges_won_pct,
+        mps.air_challenges, mps.air_challenges_won_pct,
+        mps.tackles, mps.tackles_success_pct,
+        mps.interceptions,
+        mps.loose_ball_recoveries,
+        mps.actions_opp_box, mps.actions_opp_box_success,
+        mps.chances, mps.chances_successful, mps.chances_created,
+        mps.involvement_scoring,
+        mps.shots_on_target_pct,
+        mps.lost_balls, mps.lost_balls_own_half, mps.individual_ball_losses,
+        mps.lost_balls_after_passes,
+        mps.challenges_unsuccessful, mps.dribbles_unsuccessful,
+        mps.bad_ball_control, mps.offsides,
+        mps.mistakes_goals, mps.mistakes_chances,
+        mps.fouls, mps.fouls_suffered,
+        mps.yellow_cards, mps.red_cards,
+        mps.ball_recoveries, mps.ball_recoveries_opp_half,
+        mps.actions_successful, mps.actions_unsuccessful, mps.actions,
+        mps.final_third_entries, mps.final_third_carry, mps.final_third_entries_pass,
+        mps.open_passes_received, mps.long_open_passes_received,
+        mps.super_long_open_passes_received,
+        mps.open_passes_received_first_third, mps.open_passes_received_central_third,
+        mps.open_passes_received_final_third, mps.open_passes_received_opponent_box,
+        t.name AS team
+    FROM match_player_stats mps
+    JOIN players p ON mps.player_id = p.id
+    JOIN teams t ON mps.team_id = t.id
+    WHERE mps.match_id = %s
+    """
+    params = [match_id]
+    if team_ids and len(team_ids) > 0:
+        query += " AND mps.team_id = ANY(%s)"
+        params.append(team_ids)
+    df = pd.read_sql(query, conn, params=params)
+    conn.close()
+
+    df = df[~df['position'].str.upper().str.contains('GK', na=False)]
+
+    pct_cols = [
+        'pass_accuracy', 'dribbles_success_pct', 'tackles_success_pct',
+        'crosses_accuracy', 'challenges_won_pct', 'air_challenges_won_pct',
+        'progressive_passes_accuracy', 'passes_final_third_accuracy',
+        'short_passes_accuracy', 'long_passes_accuracy',
+        'passes_into_penalty_box_accuracy', 'super_long_passes_accuracy',
+        'dribbling_final_third_success_pct', 'defensive_challenges_won_pct',
+        'attacking_challenges_won_pct', 'shots_on_target_pct',
+    ]
+    for col in pct_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            if df[col].max() <= 1.0:
+                df[col] = df[col] * 100
+
+    minutes = pd.to_numeric(df['minutes'], errors='coerce').fillna(0)
+    stats_to_norm = [
+        'goals', 'assists', 'shots', 'shots_on_target',
+        'goals_by_head', 'free_kick_shots', 'free_kick_goals',
+        'shots_from_penalty_area', 'shots_on_target_penalty_area',
+        'shots_outside_penalty_area', 'shots_on_target_outside_penalty_area',
+        'headers', 'headers_on_target',
+        'xG', 'key_passes', 'passes',
+        'short_passes', 'long_passes',
+        'progressive_passes', 'passes_final_third',
+        'passes_into_penalty_box', 'super_long_passes',
+        'crosses', 'passes_for_shot',
+        'dribbles', 'dribbling_final_third', 'carry',
+        'challenges', 'defensive_challenges', 'attacking_challenges',
+        'air_challenges', 'tackles', 'interceptions',
+        'loose_ball_recoveries', 'actions_opp_box', 'actions_opp_box_success',
+        'chances', 'chances_successful', 'chances_created',
+        'involvement_scoring',
+        'lost_balls', 'lost_balls_own_half', 'individual_ball_losses',
+        'lost_balls_after_passes', 'challenges_unsuccessful',
+        'dribbles_unsuccessful', 'bad_ball_control', 'offsides',
+        'mistakes_goals', 'mistakes_chances',
+        'fouls', 'fouls_suffered', 'yellow_cards', 'red_cards',
+        'ball_recoveries', 'ball_recoveries_opp_half',
+        'actions', 'actions_successful', 'actions_unsuccessful',
+        'final_third_entries', 'final_third_carry', 'final_third_entries_pass',
+        'open_passes_received', 'long_open_passes_received',
+        'super_long_open_passes_received',
+        'open_passes_received_first_third', 'open_passes_received_central_third',
+        'open_passes_received_final_third', 'open_passes_received_opponent_box',
+    ]
+    for col in stats_to_norm:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            df[f'{col}_p90'] = np.where(minutes > 0, (df[col] / minutes) * 90, 0)
+
+    return df
 
 # -------------------- ВИЗУАЛИЗАЦИЯ (Plotly) --------------------
 def normalize_for_radar(df, metrics, player_row):
@@ -919,8 +1133,12 @@ st.title("Анализ футболистов InStat")
 
 if 'df_db' not in st.session_state:
     st.session_state.df_db = None
+if 'df_match' not in st.session_state:
+    st.session_state.df_match = None
 if 'position_tables' not in st.session_state:
     st.session_state.position_tables = {}
+if 'position_tables_match' not in st.session_state:
+    st.session_state.position_tables_match = {}
 if 'current_settings' not in st.session_state:
     st.session_state.current_settings = load_settings()
 if 'selected_main_metrics' not in st.session_state:
@@ -933,170 +1151,184 @@ if 'avg_season' not in st.session_state:
     st.session_state.avg_season = None
 
 with st.sidebar:
-    st.header("📤 Импорт Excel в базу")
-    uploaded_file = st.file_uploader("Excel-файл лиги", type="xlsx", key="import_excel")
+    st.header("📤 Импорт Excel")
+    uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
     if uploaded_file:
-        import_league = st.selectbox("Лига", get_leagues(), key="import_league")
-        import_season = st.text_input("Сезон (например, 2024/2025)", key="import_season")
-        if st.button("Загрузить в БД", use_container_width=True):
-            if not import_season.strip():
-                st.error("Введите название сезона")
+        import_type = st.radio("Тип данных", ["Сезон", "Матч"], key="import_type")
+        if import_type == "Сезон":
+            existing_leagues = get_leagues()
+            league_option = st.selectbox("Лига", ["Выбрать существующую", "Ввести новую"], key="season_league_option")
+            if league_option == "Выбрать существующую":
+                import_league = st.selectbox("Существующая лига", existing_leagues, key="season_league_select")
             else:
-                with st.spinner("Импорт..."):
-                    try:
-                        cnt = import_excel_to_db(uploaded_file.getvalue(), import_league, import_season.strip())
+                import_league = st.text_input("Название новой лиги", key="season_league_new")
+            import_season = st.text_input("Сезон (например, 2024/2025)", key="import_season")
+            if st.button("Загрузить сезон в БД", use_container_width=True):
+                if not import_league or not import_season.strip():
+                    st.error("Заполните лигу и сезон")
+                else:
+                    with st.spinner("Импорт сезона..."):
+                        cnt = import_season_excel(uploaded_file.getvalue(), import_league.strip(), import_season.strip())
                         st.success(f"Импортировано {cnt} игроков")
-                        # Перезагружаем данные, если была выбрана та же лига/сезон
-                        if (st.session_state.get('selected_leagues') and import_league in st.session_state.selected_leagues
-                            and st.session_state.get('selected_seasons') and import_season.strip() in st.session_state.selected_seasons):
-                            df_raw = load_from_db(st.session_state.selected_leagues, st.session_state.selected_seasons, st.session_state.get('selected_teams'))
-                            df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
-                            df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
-                            df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
-                            st.session_state.df_db = df_filtered
-                            st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
-                    except Exception as e:
-                        st.error(f"Ошибка импорта: {e}")
+        else:  # Матч
+            existing_leagues = get_leagues()
+            league_option = st.selectbox("Лига", ["Выбрать существующую", "Ввести новую"], key="match_league_option")
+            if league_option == "Выбрать существующую":
+                match_league = st.selectbox("Существующая лига", existing_leagues, key="match_league_select")
+            else:
+                match_league = st.text_input("Название новой лиги", key="match_league_new")
+            match_season = st.text_input("Сезон (например, 2024/2025)", key="match_season")
+            col1, col2 = st.columns(2)
+            with col1:
+                home_team = st.text_input("Домашняя команда", key="home_team")
+            with col2:
+                away_team = st.text_input("Гостевая команда", key="away_team")
+            match_date = st.date_input("Дата матча", value=None, key="match_date")
+            match_label = st.text_input("Метка матча (например, Финал)", key="match_label")
+            if st.button("Загрузить матч в БД", use_container_width=True):
+                if not all([match_league.strip(), match_season.strip(), home_team.strip(), away_team.strip()]):
+                    st.error("Заполните обязательные поля")
+                else:
+                    with st.spinner("Импорт матча..."):
+                        mid = import_match_excel(uploaded_file.getvalue(), match_league.strip(), match_season.strip(),
+                                                home_team.strip(), away_team.strip(),
+                                                match_date, match_label.strip())
+                        st.success(f"Матч #{mid} загружен")
 
-    st.header("📊 Загрузка данных из БД")
+    st.header("📊 Сезонная статистика")
     leagues_list = get_leagues()
     if not leagues_list:
-        st.warning("Нет доступных лиг в базе данных или ошибка подключения.")
+        st.warning("Нет лиг в базе")
         selected_leagues = []
     else:
         selected_leagues = st.multiselect("Лиги", leagues_list, key="league_db")
-    st.session_state.selected_leagues = selected_leagues
-
     if selected_leagues:
         seasons_list = get_seasons_for_leagues(selected_leagues)
         if not seasons_list:
-            st.warning("Для выбранных лиг нет данных.")
+            st.warning("Нет сезонов")
             selected_seasons = []
         else:
             selected_seasons = st.multiselect("Сезоны", seasons_list, key="season_db")
     else:
         selected_seasons = []
-    st.session_state.selected_seasons = selected_seasons
-
     if selected_leagues and selected_seasons:
         teams_list = get_teams_for_leagues_seasons(selected_leagues, selected_seasons)
         if teams_list:
-            selected_teams = st.multiselect("Команды (оставьте пустым – все)", teams_list, key="teams_db")
+            selected_teams = st.multiselect("Команды", teams_list, key="teams_db")
         else:
-            st.info("Нет команд для выбранных лиг и сезонов.")
             selected_teams = []
     else:
         selected_teams = []
-    st.session_state.selected_teams = selected_teams
-
     if selected_leagues and selected_seasons:
-        if st.button("Загрузить данные", use_container_width=True):
-            with st.spinner("Запрос к Supabase..."):
-                try:
-                    teams_param = None if len(selected_teams) == 0 else selected_teams
-                    df_raw = load_from_db(selected_leagues, selected_seasons, teams_param)
-                    total = len(df_raw)
-                    df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
-                    if len(df_filtered) == 0:
-                        st.error("Нет игроков с достаточным игровым временем.")
+        if st.button("Загрузить сезонные данные", use_container_width=True):
+            with st.spinner("Запрос..."):
+                teams_param = None if len(selected_teams) == 0 else selected_teams
+                df_raw = load_from_db(selected_leagues, selected_seasons, teams_param)
+                total = len(df_raw)
+                df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
+                if len(df_filtered) == 0:
+                    st.error("Нет игроков с достаточным временем")
+                else:
+                    df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
+                    df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
+                    st.session_state.df_db = df_filtered
+                    st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
+                    st.session_state.pop('position_compare_params', None)
+                    st.success(f"Загружено {len(df_filtered)} игроков")
+    else:
+        st.info("Выберите лигу и сезон")
+
+    st.header("⚽ Матчевая статистика")
+    matches = get_matches()
+    if not matches:
+        st.info("Нет загруженных матчей")
+    else:
+        match_options = [f"#{m[0]} {m[1]} ({m[2]}, {m[3]}) {m[4]} vs {m[5]}" for m in matches]
+        selected_match_label = st.selectbox("Выберите матч", match_options, key="match_select")
+        if selected_match_label:
+            match_id = int(selected_match_label.split()[0][1:])
+            match_info = next(m for m in matches if m[0] == match_id)
+            home_team = match_info[4]
+            away_team = match_info[5]
+            team_choice = st.radio("Команда", ["Обе", home_team, away_team], key="match_team_choice")
+            if st.button("Загрузить матч", use_container_width=True):
+                with st.spinner("Загрузка матча..."):
+                    team_ids = None
+                    if team_choice == home_team:
+                        conn = psycopg2.connect(**get_db_config())
+                        cur = conn.cursor()
+                        cur.execute("SELECT id FROM teams WHERE name = %s", (home_team,))
+                        tid = cur.fetchone()
+                        if tid:
+                            team_ids = [tid[0]]
+                        cur.close()
+                        conn.close()
+                    elif team_choice == away_team:
+                        conn = psycopg2.connect(**get_db_config())
+                        cur = conn.cursor()
+                        cur.execute("SELECT id FROM teams WHERE name = %s", (away_team,))
+                        tid = cur.fetchone()
+                        if tid:
+                            team_ids = [tid[0]]
+                        cur.close()
+                        conn.close()
+                    df_match = load_match_stats(match_id, team_ids)
+                    if df_match.empty:
+                        st.error("Нет данных")
                     else:
-                        df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
-                        df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
-                        st.session_state.df_db = df_filtered
-                        st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
-                        st.session_state.pop('position_compare_params', None)
-                        st.success(f"Загружено {len(df_filtered)} игроков")
-                except Exception as e:
-                    st.error(f"Ошибка: {e}")
+                        df_match['league'] = 'match'
+                        df_match = calculate_ratings(df_match, st.session_state.current_settings)
+                        df_match = df_match.sort_values('rating', ascending=False).reset_index(drop=True)
+                        st.session_state.df_match = df_match
+                        st.session_state.position_tables_match = build_position_tables(df_match, st.session_state.current_settings)
+                        st.success(f"Загружено {len(df_match)} игроков")
 
     # Настройки весов
-    st.header("⚙️ Настройки весов")
-    if st.button("Открыть редактор весов", use_container_width=True):
+    st.header("⚙️ Веса")
+    if st.button("Редактор весов", use_container_width=True):
         st.session_state.show_weights_editor = True
-    if st.button("Сбросить веса по умолчанию", use_container_width=True):
+    if st.button("Сбросить веса", use_container_width=True):
         st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
         save_settings(st.session_state.current_settings)
         st.cache_data.clear()
-        st.success("Веса сброшены.")
+        st.success("Веса сброшены")
         if st.session_state.df_db is not None:
             st.session_state.df_db = calculate_ratings(st.session_state.df_db, st.session_state.current_settings)
             st.session_state.position_tables = build_position_tables(st.session_state.df_db, st.session_state.current_settings)
+        if st.session_state.df_match is not None:
+            st.session_state.df_match = calculate_ratings(st.session_state.df_match, st.session_state.current_settings)
+            st.session_state.position_tables_match = build_position_tables(st.session_state.df_match, st.session_state.current_settings)
 
-    # Средние характеристики
-    st.header("📊 Средние характеристики")
-    avg_source = st.radio("Источник средних", ["Текущие данные", "Лига из БД"], key="avg_source")
+    st.header("📊 Средние")
+    avg_source = st.radio("Источник", ["Текущие данные", "Лига из БД"], key="avg_source")
     if avg_source == "Лига из БД":
         avg_league = st.selectbox("Лига для средних", get_leagues(), key="avg_league")
         if avg_league:
             avg_seasons = get_seasons_for_leagues([avg_league])
-            avg_season = st.selectbox("Сезон для средних", avg_seasons, key="avg_season") if avg_seasons else None
+            avg_season = st.selectbox("Сезон", avg_seasons, key="avg_season") if avg_seasons else None
         else:
             avg_season = None
     else:
-        avg_league = None
-        avg_season = None
+        avg_league = None; avg_season = None
 
-    # Визуализация (сравнение двух игроков)
-    if st.session_state.df_db is not None:
-        st.header("🔍 Сравнение игроков")
-        all_players = st.session_state.df_db['player'].tolist()
+# Основная область с вкладками
+tab_season, tab_match = st.tabs(["📈 Сезон", "⚽ Матч"])
 
-        st.subheader("Два игрока")
-        compare_player1 = st.selectbox("Игрок 1", all_players, key="cp1_v2")
-        compare_player2 = st.selectbox("Игрок 2", all_players, key="cp2_v2")
-        if st.button("Сравнить выбранных", use_container_width=True, key="compare_btn_v2"):
-            if compare_player1 == compare_player2:
-                st.warning("Выберите разных игроков.")
-            else:
-                p1 = st.session_state.df_db[st.session_state.df_db['player'] == compare_player1].iloc[0]
-                p2 = st.session_state.df_db[st.session_state.df_db['player'] == compare_player2].iloc[0]
-                pos1 = get_position_group(p1['position'])
-                pos2 = get_position_group(p2['position'])
-                metrics_set = set()
-                for m in st.session_state.current_settings.get(pos1, {}) | st.session_state.current_settings.get(pos2, {}):
-                    if m in st.session_state.df_db.columns:
-                        metrics_set.add(m)
-                radar_metrics = list(metrics_set)[:8]
-                if not radar_metrics:
-                    radar_metrics = [c for c in st.session_state.df_db.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-                avg_series = get_average_series(radar_metrics, st.session_state.df_db)
-                fig = create_compare_figure(p1, p2, radar_metrics, st.session_state.df_db, avg_values=avg_series)
-                st.plotly_chart(fig, use_container_width=True)
-
-        st.subheader("По позиции")
-        position_choice = st.selectbox("Позиция", ['FW','AM','CM','FB','CB'], key="pos_choice_comp_v2")
-        pos_df = st.session_state.df_db[st.session_state.df_db['position'].map(get_position_group) == position_choice]
-        pos_players = pos_df['player'].tolist()
-        if not pos_players:
-            st.info(f"Нет игроков позиции **{position_choice}**")
-        else:
-            selected_players = st.multiselect("Выберите до 6 игроков", pos_players, max_selections=6, key="multi_players_pos_v2")
-            if st.button("Сравнить игроков позиции", use_container_width=True, key="btn_compare_pos_v2"):
-                if len(selected_players) < 2:
-                    st.warning("Выберите хотя бы двух игроков.")
-                else:
-                    st.session_state.position_compare_params = {
-                        'players': selected_players,
-                        'position': position_choice,
-                    }
-
-# Основная область
-if st.session_state.df_db is not None:
-    df_active = st.session_state.df_db
-    position_tables_active = st.session_state.position_tables
-
+def render_analysis(df_active, position_tables_active, context_key):
+    if df_active is None:
+        st.info("Загрузите данные")
+        return
     all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
     metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in all_metrics}
-    with st.expander("Настройка колонок общей таблицы"):
+    with st.expander("Настройка колонок"):
         selected_metrics = st.multiselect(
-            "Выберите до 5 метрик для отображения",
+            "Метрики для таблицы",
             options=all_metrics,
             format_func=lambda m: metric_names[m],
             default=st.session_state.selected_main_metrics if st.session_state.selected_main_metrics else all_metrics[:3],
             max_selections=5,
-            key="main_metrics_selector"
+            key=f"main_metrics_selector_{context_key}"
         )
-    st.session_state.selected_main_metrics = selected_metrics
     if not selected_metrics:
         selected_metrics = all_metrics[:3]
 
@@ -1104,9 +1336,9 @@ if st.session_state.df_db is not None:
 
     with tabs[0]:
         df_main = build_main_table(df_active, selected_metrics)
-        st.dataframe(df_main, height=600, use_container_width=True, on_select="rerun", selection_mode="single-row", key="main_table")
-        if "main_table" in st.session_state and st.session_state.main_table.selection.rows:
-            idx = next(iter(st.session_state.main_table.selection.rows))
+        st.dataframe(df_main, height=600, use_container_width=True, on_select="rerun", selection_mode="single-row", key=f"main_table_{context_key}")
+        if f"main_table_{context_key}" in st.session_state and st.session_state[f"main_table_{context_key}"].selection.rows:
+            idx = next(iter(st.session_state[f"main_table_{context_key}"].selection.rows))
             if idx < len(df_active):
                 player_row = df_active.iloc[idx]
                 col1, col2, col3 = st.columns([1, 2, 1])
@@ -1127,8 +1359,8 @@ if st.session_state.df_db is not None:
             if rows:
                 numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
                 df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
-                st.dataframe(df_pos, height=400, use_container_width=True, on_select="rerun", selection_mode="single-row", key=f"table_{pos}")
-                state_key = f"table_{pos}"
+                st.dataframe(df_pos, height=400, use_container_width=True, on_select="rerun", selection_mode="single-row", key=f"table_{pos}_{context_key}")
+                state_key = f"table_{pos}_{context_key}"
                 if state_key in st.session_state and st.session_state[state_key].selection.rows:
                     idx = next(iter(st.session_state[state_key].selection.rows))
                     if idx < len(rows):
@@ -1151,29 +1383,7 @@ if st.session_state.df_db is not None:
             else:
                 st.info(f"Нет игроков позиции {pos}")
 
-    # Отображение радара сравнения по позиции
-    if 'position_compare_params' in st.session_state and st.session_state.position_compare_params:
-        params = st.session_state.position_compare_params
-        st.header("⚔️ Сравнение игроков одной позиции")
-        players_data = []
-        for name in params['players']:
-            row = df_active[df_active['player'] == name]
-            if not row.empty:
-                players_data.append(row.iloc[0])
-        if players_data:
-            pos = params['position']
-            pos_metrics = [m for m, w in st.session_state.current_settings.get(pos, {}).items() if w != 0 and m in df_active.columns]
-            if pos_metrics:
-                colors = ['blue','red','green','orange','purple','brown']
-                avg_series = get_average_series(pos_metrics, df_active)
-                fig = create_position_radar(players_data, df_active, pos_metrics, colors, avg_values=avg_series)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("Для выбранной позиции отсутствуют настроенные метрики.")
-        else:
-            st.warning("Не удалось найти выбранных игроков в текущих данных.")
-
-    if st.button("📥 Экспорт в Excel"):
+    if st.button("📥 Экспорт в Excel", key=f"export_{context_key}"):
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_main.to_excel(writer, sheet_name='Общий рейтинг', index=False)
@@ -1194,15 +1404,24 @@ if st.session_state.df_db is not None:
                                           mid_type='percentile', mid_value=50, mid_color='FFFFEB',
                                           end_type='max', end_color='C6EFCE')
                         )
-        st.download_button(label="Скачать Excel", data=output.getvalue(), file_name="players_rating.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button(label="Скачать Excel", data=output.getvalue(), file_name=f"players_rating_{context_key}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+with tab_season:
+    render_analysis(st.session_state.df_db, st.session_state.position_tables, "season")
+
+with tab_match:
+    render_analysis(st.session_state.df_match, st.session_state.position_tables_match, "match")
 
 # Редактор весов
 if st.session_state.get('show_weights_editor'):
     with st.expander("Редактор весов метрик", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
         pos_names = {'FW':'Нападающие','AM':'Атак. полузащитники','CM':'Центр. полузащитники','FB':'Крайние защитники','CB':'Центр. защитники'}
-        if df_active is not None:
-            available_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
+        # Берём активный датафрейм для доступных метрик
+        if st.session_state.df_db is not None:
+            available_metrics = [m for m in ALL_POSSIBLE_METRICS if m in st.session_state.df_db.columns]
+        elif st.session_state.df_match is not None:
+            available_metrics = [m for m in ALL_POSSIBLE_METRICS if m in st.session_state.df_match.columns]
         else:
             available_metrics = ALL_POSSIBLE_METRICS
         weight_tabs = st.tabs([pos_names[p] for p in positions_order])
@@ -1240,6 +1459,9 @@ if st.session_state.get('show_weights_editor'):
                 if st.session_state.df_db is not None:
                     st.session_state.df_db = calculate_ratings(st.session_state.df_db, new_weights)
                     st.session_state.position_tables = build_position_tables(st.session_state.df_db, new_weights)
+                if st.session_state.df_match is not None:
+                    st.session_state.df_match = calculate_ratings(st.session_state.df_match, new_weights)
+                    st.session_state.position_tables_match = build_position_tables(st.session_state.df_match, new_weights)
                 st.rerun()
         with col2:
             if st.button("Отмена", use_container_width=True, key="cancel_weights"):
