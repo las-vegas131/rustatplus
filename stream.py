@@ -738,6 +738,7 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
     conn.autocommit = True
     cur = conn.cursor()
 
+    # Лига
     cur.execute("INSERT INTO leagues (name) VALUES (%s) ON CONFLICT (name) DO NOTHING", (league_name,))
     cur.execute("SELECT id FROM leagues WHERE name = %s", (league_name,))
     league_id = cur.fetchone()[0]
@@ -753,18 +754,21 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
     home_id = get_or_create_team(home_team)
     away_id = get_or_create_team(away_team)
 
+    # Проверяем, существует ли уже такой матч
     cur.execute("""
-        INSERT INTO matches (season, league_id, home_team_id, away_team_id, match_date, label)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT (season, league_id, home_team_id, away_team_id, label) DO NOTHING
-        RETURNING id
-    """, (season, league_id, home_id, away_id, match_date, label))
+        SELECT id FROM matches 
+        WHERE season = %s AND league_id = %s AND home_team_id = %s AND away_team_id = %s AND label = %s
+    """, (season, league_id, home_id, away_id, label))
     match_row = cur.fetchone()
     if match_row:
         match_id = match_row[0]
     else:
-        cur.execute("SELECT id FROM matches WHERE season=%s AND league_id=%s AND home_team_id=%s AND away_team_id=%s AND label=%s",
-                    (season, league_id, home_id, away_id, label))
+        # Создаём новый матч (без ON CONFLICT, так как ограничения может не быть)
+        cur.execute("""
+            INSERT INTO matches (season, league_id, home_team_id, away_team_id, match_date, label)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id
+        """, (season, league_id, home_id, away_id, match_date, label))
         match_id = cur.fetchone()[0]
 
     stats_fields_match = [f for f in STATS_FIELDS_SEASON if f != 'season']
