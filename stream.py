@@ -546,7 +546,7 @@ def load_from_db(league_names, seasons, teams=None):
 
 # -------------------- ИМПОРТ СЕЗОННОГО EXCEL --------------------
 RENAME_DICT_IMPORT = {
-    'Player': 'player', 'Team': 'team', 'Position': 'position',
+    'Player': 'player', 'Position': 'position',
     'Minutes played': 'minutes_played',
     'Goals': 'goals', 'Assists': 'assists',
     'Shots': 'shots', 'Shots on target': 'shots_on_target',
@@ -620,7 +620,7 @@ RENAME_DICT_IMPORT = {
     'Open passes received in the opponent\'s box': 'open_passes_received_opponent_box',
 }
 
-STATS_FIELDS_SEASON = [v for k, v in RENAME_DICT_IMPORT.items() if k not in ['Player', 'Team', 'Position']]
+STATS_FIELDS_SEASON = [v for k, v in RENAME_DICT_IMPORT.items() if k not in ['Player', 'Position']]
 
 def clean_value(v):
     if pd.isna(v) or str(v).strip() in ('', '-'):
@@ -630,7 +630,7 @@ def clean_value(v):
     except (ValueError, TypeError):
         return None
 
-def import_season_excel(uploaded_file_content, league_name, season):
+def import_season_excel(uploaded_file_content, league_name, season, team_column='Team'):
     try:
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
     except ValueError:
@@ -638,14 +638,23 @@ def import_season_excel(uploaded_file_content, league_name, season):
         first_sheet = xls.sheet_names[0]
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name=first_sheet, header=0)
     df = df.dropna(subset=['№'])
+
+    # Переименование стандартных колонок
     existing_renames = {k: v for k, v in RENAME_DICT_IMPORT.items() if k in df.columns}
+    # Добавляем переименование колонки команды, если она ещё не 'team'
+    if team_column and team_column != 'team':
+        existing_renames[team_column] = 'team'
     df = df.rename(columns=existing_renames)
 
-    # Фильтр вратарей – только если колонка position существует
+    if 'player' not in df.columns:
+        st.error("В файле нет колонки 'Player'. Импорт невозможен.")
+        return 0
+    if 'team' not in df.columns:
+        st.error(f"В файле нет колонки '{team_column}'. Импорт невозможен.")
+        return 0
+
     if 'position' in df.columns:
         df = df[~df['position'].str.upper().str.contains('GK', na=False)]
-    else:
-        st.warning("Колонка 'position' не найдена в Excel – фильтрация вратарей пропущена")
 
     conn = psycopg2.connect(**get_db_config())
     conn.autocommit = True
@@ -699,7 +708,7 @@ def import_season_excel(uploaded_file_content, league_name, season):
     return inserted
 
 
-def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label, which_team='both'):
+def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label, which_team='both', team_column='Team'):
     try:
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
     except ValueError:
@@ -707,16 +716,22 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
         first_sheet = xls.sheet_names[0]
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name=first_sheet, header=0)
     df = df.dropna(subset=['№'])
+
     existing_renames = {k: v for k, v in RENAME_DICT_IMPORT.items() if k in df.columns}
+    if team_column and team_column != 'team':
+        existing_renames[team_column] = 'team'
     df = df.rename(columns=existing_renames)
 
-    # Фильтр вратарей – только если колонка position существует
+    if 'player' not in df.columns:
+        st.error("В файле нет колонки 'Player'. Импорт невозможен.")
+        return None
+    if 'team' not in df.columns:
+        st.error(f"В файле нет колонки '{team_column}'. Импорт невозможен.")
+        return None
+
     if 'position' in df.columns:
         df = df[~df['position'].str.upper().str.contains('GK', na=False)]
-    else:
-        st.warning("Колонка 'position' не найдена в Excel – фильтрация вратарей пропущена")
 
-    # Фильтр по выбранной команде
     if which_team == 'home':
         df = df[df['team'] == home_team]
     elif which_team == 'away':
@@ -1168,11 +1183,31 @@ if 'avg_league' not in st.session_state:
     st.session_state.avg_league = None
 if 'avg_season' not in st.session_state:
     st.session_state.avg_season = None
+if 'team_column' not in st.session_state:
+    st.session_state.team_column = 'Team'
 
 with st.sidebar:
     st.header("📤 Импорт Excel")
     uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
     if uploaded_file:
+        # Определяем колонки файла
+        try:
+            df_head = pd.read_excel(io.BytesIO(uploaded_file.getvalue()), nrows=0)
+            columns = df_head.columns.tolist()
+        except Exception:
+            columns = []
+        if columns:
+            team_col = st.selectbox(
+                "Колонка с командой",
+                columns,
+                index=columns.index(st.session_state.team_column) if st.session_state.team_column in columns else 0,
+                key="team_column_select"
+            )
+            st.session_state.team_column = team_col
+        else:
+            st.error("Не удалось прочитать колонки файла")
+            team_col = None
+
         import_type = st.radio("Тип данных", ["Сезон", "Матч"], key="import_type")
         if import_type == "Сезон":
             existing_leagues = get_leagues()
@@ -1183,12 +1218,15 @@ with st.sidebar:
                 import_league = st.text_input("Название новой лиги", key="season_league_new")
             import_season = st.text_input("Сезон (например, 2024/2025)", key="import_season")
             if st.button("Загрузить сезон в БД", use_container_width=True):
-                if not import_league or not import_season.strip():
-                    st.error("Заполните лигу и сезон")
+                if not import_league or not import_season.strip() or not team_col:
+                    st.error("Заполните все поля")
                 else:
                     with st.spinner("Импорт сезона..."):
-                        cnt = import_season_excel(uploaded_file.getvalue(), import_league.strip(), import_season.strip())
-                        st.success(f"Импортировано {cnt} игроков")
+                        cnt = import_season_excel(uploaded_file.getvalue(), import_league.strip(), import_season.strip(), team_column=team_col)
+                        if cnt:
+                            st.success(f"Импортировано {cnt} игроков")
+                        else:
+                            st.error("Импорт не удался")
         else:  # Матч
             existing_leagues = get_leagues()
             league_option = st.selectbox("Лига", ["Выбрать существующую", "Ввести новую"], key="match_league_option")
@@ -1203,13 +1241,12 @@ with st.sidebar:
             with col2:
                 away_team = st.text_input("Гостевая команда", key="away_team")
 
-            # НОВОЕ: выбор загружаемой команды
             team_to_load = st.radio("Какую команду загружаем?", ["Обе", "Только хозяев", "Только гостей"], key="match_team_load")
 
             match_date = st.date_input("Дата матча", value=None, key="match_date")
             match_label = st.text_input("Метка матча (например, Финал)", key="match_label")
             if st.button("Загрузить матч в БД", use_container_width=True):
-                if not all([match_league.strip(), match_season.strip(), home_team.strip(), away_team.strip()]):
+                if not all([match_league.strip(), match_season.strip(), home_team.strip(), away_team.strip(), team_col]):
                     st.error("Заполните обязательные поля")
                 else:
                     with st.spinner("Импорт матча..."):
@@ -1221,8 +1258,12 @@ with st.sidebar:
                         mid = import_match_excel(uploaded_file.getvalue(), match_league.strip(), match_season.strip(),
                                                 home_team.strip(), away_team.strip(),
                                                 match_date, match_label.strip(),
-                                                which_team=team_arg)
-                        st.success(f"Матч #{mid} загружен")
+                                                which_team=team_arg,
+                                                team_column=team_col)
+                        if mid:
+                            st.success(f"Матч #{mid} загружен")
+                        else:
+                            st.error("Не удалось импортировать матч")
 
     st.header("📊 Сезонная статистика")
     leagues_list = get_leagues()
@@ -1343,7 +1384,6 @@ with st.sidebar:
 # -------------------- ОСНОВНАЯ ОБЛАСТЬ (ВКЛАДКИ) --------------------
 tab_season, tab_match = st.tabs(["📈 Сезон", "⚽ Матч"])
 
-# ---------- Вкладка СЕЗОН ----------
 with tab_season:
     if st.session_state.df_db is not None:
         df_active = st.session_state.df_db
@@ -1415,31 +1455,32 @@ with tab_season:
                 else:
                     st.info(f"Нет игроков позиции {pos}")
 
-        # Кнопка сравнения по позиции (в сайдбаре) — отображаем радар здесь
-        if 'position_compare_params' in st.session_state and st.session_state.position_compare_params:
-            params = st.session_state.position_compare_params
-            st.header("⚔️ Сравнение игроков одной позиции")
-            players_data = []
-            for name in params['players']:
-                row = df_active[df_active['player'] == name]
-                if not row.empty:
-                    players_data.append(row.iloc[0])
-            if players_data:
-                pos = params['position']
-                pos_metrics = [m for m, w in st.session_state.current_settings.get(pos, {}).items() if w != 0 and m in df_active.columns]
-                if pos_metrics:
-                    colors = ['blue','red','green','orange','purple','brown']
-                    avg_series = get_average_series(pos_metrics, df_active)
-                    fig = create_position_radar(players_data, df_active, pos_metrics, colors, avg_values=avg_series)
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.warning("Для выбранной позиции отсутствуют настроенные метрики.")
-            else:
-                st.warning("Не удалось найти выбранных игроков в текущих данных.")
+        if st.button("📥 Экспорт в Excel", key="export_season"):
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_main = build_main_table(df_active, selected_metrics)
+                df_main.to_excel(writer, sheet_name='Общий рейтинг', index=False)
+                for pos, (rows, headers) in position_tables_active.items():
+                    if rows:
+                        df_pos = pd.DataFrame(rows, columns=headers)
+                        df_pos.to_excel(writer, sheet_name=pos, index=False)
+                        from openpyxl.formatting.rule import ColorScaleRule
+                        from openpyxl.utils import get_column_letter
+                        ws = writer.sheets[pos]
+                        metric_columns = list(range(4, 4 + len(headers) - 3))
+                        for col_idx in metric_columns:
+                            col_letter = get_column_letter(col_idx)
+                            max_row = len(rows) + 1
+                            ws.conditional_formatting.add(
+                                f'{col_letter}2:{col_letter}{max_row}',
+                                ColorScaleRule(start_type='min', start_color='FFC7CE',
+                                              mid_type='percentile', mid_value=50, mid_color='FFFFEB',
+                                              end_type='max', end_color='C6EFCE')
+                            )
+            st.download_button(label="Скачать Excel", data=output.getvalue(), file_name="season_players_rating.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
         st.info("Загрузите сезонные данные (в боковой панели)")
 
-# ---------- Вкладка МАТЧ ----------
 with tab_match:
     if st.session_state.df_match is not None:
         df_active = st.session_state.df_match
