@@ -639,9 +639,7 @@ def import_season_excel(uploaded_file_content, league_name, season, team_column=
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name=first_sheet, header=0)
     df = df.dropna(subset=['№'])
 
-    # Переименование стандартных колонок
     existing_renames = {k: v for k, v in RENAME_DICT_IMPORT.items() if k in df.columns}
-    # Добавляем переименование колонки команды, если она ещё не 'team'
     if team_column and team_column != 'team':
         existing_renames[team_column] = 'team'
     df = df.rename(columns=existing_renames)
@@ -707,7 +705,6 @@ def import_season_excel(uploaded_file_content, league_name, season, team_column=
     conn.close()
     return inserted
 
-
 def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label, which_team='both', team_column='Team'):
     try:
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
@@ -759,7 +756,7 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
     cur.execute("""
         INSERT INTO matches (season, league_id, home_team_id, away_team_id, match_date, label)
         VALUES (%s, %s, %s, %s, %s, %s)
-        ON CONFLICT DO NOTHING
+        ON CONFLICT (season, league_id, home_team_id, away_team_id, label) DO NOTHING
         RETURNING id
     """, (season, league_id, home_id, away_id, match_date, label))
     match_row = cur.fetchone()
@@ -857,6 +854,26 @@ def get_teams_for_leagues_seasons(league_names, seasons):
             WHERE l.name = ANY(%s) AND ps.season = ANY(%s)
             ORDER BY t.name
         """, (league_names, seasons))
+        teams = [row[0] for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return teams
+    except:
+        return []
+
+# Новая функция: получить все команды лиги (независимо от сезона)
+@st.cache_data(ttl=60)
+def get_teams_for_league(league_name):
+    try:
+        conn = psycopg2.connect(**get_db_config())
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT t.name
+            FROM teams t
+            JOIN leagues l ON t.league_id = l.id
+            WHERE l.name = %s
+            ORDER BY t.name
+        """, (league_name,))
         teams = [row[0] for row in cur.fetchall()]
         cur.close()
         conn.close()
@@ -1190,7 +1207,6 @@ with st.sidebar:
     st.header("📤 Импорт Excel")
     uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
     if uploaded_file:
-        # Определяем колонки файла
         try:
             df_head = pd.read_excel(io.BytesIO(uploaded_file.getvalue()), nrows=0)
             columns = df_head.columns.tolist()
@@ -1228,18 +1244,34 @@ with st.sidebar:
                         else:
                             st.error("Импорт не удался")
         else:  # Матч
+            # Выбор лиги
             existing_leagues = get_leagues()
             league_option = st.selectbox("Лига", ["Выбрать существующую", "Ввести новую"], key="match_league_option")
             if league_option == "Выбрать существующую":
                 match_league = st.selectbox("Лига", existing_leagues, key="match_league_select")
+                # Получаем команды этой лиги из БД
+                teams_in_league = get_teams_for_league(match_league)
+                # Добавляем опцию "Ввести новую"
+                teams_in_league.append("Ввести новую команду")
+                # Выбор домашней команды
+                home_team_choice = st.selectbox("Домашняя команда", teams_in_league, key="home_team_select")
+                if home_team_choice == "Ввести новую команду":
+                    home_team = st.text_input("Название домашней команды", key="home_team_new")
+                else:
+                    home_team = home_team_choice
+                # Выбор гостевой команды (список тот же)
+                away_team_choice = st.selectbox("Гостевая команда", teams_in_league, key="away_team_select")
+                if away_team_choice == "Ввести новую команду":
+                    away_team = st.text_input("Название гостевой команды", key="away_team_new")
+                else:
+                    away_team = away_team_choice
             else:
+                # Новая лига – текстовые поля для команд
                 match_league = st.text_input("Название новой лиги", key="match_league_new")
+                home_team = st.text_input("Домашняя команда", key="home_team_text")
+                away_team = st.text_input("Гостевая команда", key="away_team_text")
+
             match_season = st.text_input("Сезон (например, 2024/2025)", key="match_season")
-            col1, col2 = st.columns(2)
-            with col1:
-                home_team = st.text_input("Домашняя команда", key="home_team")
-            with col2:
-                away_team = st.text_input("Гостевая команда", key="away_team")
 
             team_to_load = st.radio("Какую команду загружаем?", ["Обе", "Только хозяев", "Только гостей"], key="match_team_load")
 
@@ -1255,15 +1287,18 @@ with st.sidebar:
                             team_arg = 'home'
                         elif team_to_load == "Только гостей":
                             team_arg = 'away'
-                        mid = import_match_excel(uploaded_file.getvalue(), match_league.strip(), match_season.strip(),
-                                                home_team.strip(), away_team.strip(),
-                                                match_date, match_label.strip(),
-                                                which_team=team_arg,
-                                                team_column=team_col)
-                        if mid:
-                            st.success(f"Матч #{mid} загружен")
-                        else:
-                            st.error("Не удалось импортировать матч")
+                        try:
+                            mid = import_match_excel(uploaded_file.getvalue(), match_league.strip(), match_season.strip(),
+                                                    home_team.strip(), away_team.strip(),
+                                                    match_date, match_label.strip(),
+                                                    which_team=team_arg,
+                                                    team_column=team_col)
+                            if mid:
+                                st.success(f"Матч #{mid} загружен")
+                            else:
+                                st.error("Не удалось импортировать матч")
+                        except Exception as e:
+                            st.error(f"Ошибка импорта матча: {e}")
 
     st.header("📊 Сезонная статистика")
     leagues_list = get_leagues()
