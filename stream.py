@@ -620,7 +620,7 @@ RENAME_DICT_IMPORT = {
     'Open passes received in the opponent\'s box': 'open_passes_received_opponent_box',
 }
 
-STATS_FIELDS_SEASON = [v for k, v in RENAME_DICT_IMPORT.items() if k not in ['Player', 'Position', 'Team']]
+STATS_FIELDS_SEASON = [v for k, v in RENAME_DICT_IMPORT.items() if k not in ['Player', 'Position']]
 
 def clean_value(v):
     if pd.isna(v) or str(v).strip() in ('', '-'):
@@ -704,7 +704,7 @@ def import_season_excel(uploaded_file_content, league_name, season, team_column=
     conn.close()
     return inserted
 
-def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label, which_team='home', team_column='Team'):
+def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label, which_team='home'):
     try:
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
     except ValueError:
@@ -714,24 +714,20 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
     df = df.dropna(subset=['№'])
 
     existing_renames = {k: v for k, v in RENAME_DICT_IMPORT.items() if k in df.columns}
-    if team_column and team_column != 'team':
-        existing_renames[team_column] = 'team'
     df = df.rename(columns=existing_renames)
 
     if 'player' not in df.columns:
         st.error("В файле нет колонки 'Player'. Импорт невозможен.")
         return None
-    if 'team' not in df.columns:
-        st.error(f"В файле нет колонки '{team_column}'. Импорт невозможен.")
-        return None
+
+    # Присваиваем команду в зависимости от выбора пользователя
+    if which_team == 'home':
+        df['team'] = home_team
+    else:
+        df['team'] = away_team
 
     if 'position' in df.columns:
         df = df[~df['position'].str.upper().str.contains('GK', na=False)]
-
-    if which_team == 'home':
-        df = df[df['team'] == home_team]
-    elif which_team == 'away':
-        df = df[df['team'] == away_team]
 
     conn = psycopg2.connect(**get_db_config())
     conn.autocommit = True
@@ -753,7 +749,8 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
 
     cur.execute("""
         SELECT id FROM matches 
-        WHERE season = %s AND league_id = %s AND home_team_id = %s AND away_team_id = %s AND (label = %s OR (label IS NULL AND %s IS NULL))
+        WHERE season = %s AND league_id = %s AND home_team_id = %s AND away_team_id = %s 
+          AND (label = %s OR (label IS NULL AND %s IS NULL))
     """, (season, league_id, home_id, away_id, label, label))
     match_row = cur.fetchone()
     if match_row:
@@ -1203,17 +1200,6 @@ with st.sidebar:
     st.header("📤 Импорт Excel")
     uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
     if uploaded_file:
-        # Определяем колонки файла, чтобы дать пользователю выбрать колонку команды
-        try:
-            df_head = pd.read_excel(io.BytesIO(uploaded_file.getvalue()), nrows=0)
-            columns = df_head.columns.tolist()
-        except Exception:
-            columns = []
-        if columns:
-            team_col = st.selectbox("Колонка с командой", columns, index=0, key="team_column_select")
-        else:
-            team_col = 'Team'  # fallback, если не удалось прочитать колонки
-
         import_type = st.radio("Тип данных", ["Сезон", "Матч"], key="import_type")
         if import_type == "Сезон":
             existing_leagues = get_leagues()
@@ -1227,7 +1213,7 @@ with st.sidebar:
                         st.error("Введите название сезона")
                     else:
                         with st.spinner("Импорт сезона..."):
-                            cnt = import_season_excel(uploaded_file.getvalue(), import_league.strip(), import_season.strip(), team_column=team_col)
+                            cnt = import_season_excel(uploaded_file.getvalue(), import_league.strip(), import_season.strip())
                             if cnt:
                                 st.success(f"Импортировано {cnt} игроков")
                             else:
@@ -1264,8 +1250,7 @@ with st.sidebar:
                                     mid = import_match_excel(uploaded_file.getvalue(), match_league.strip(), match_season.strip(),
                                                             home_team.strip(), away_team.strip(),
                                                             match_date, match_label.strip() if match_label else None,
-                                                            which_team=team_arg,
-                                                            team_column=team_col)
+                                                            which_team=team_arg)
                                     if mid:
                                         st.success(f"Матч #{mid} загружен")
                                     else:
