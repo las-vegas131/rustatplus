@@ -640,7 +640,12 @@ def import_season_excel(uploaded_file_content, league_name, season):
     df = df.dropna(subset=['№'])
     existing_renames = {k: v for k, v in RENAME_DICT_IMPORT.items() if k in df.columns}
     df = df.rename(columns=existing_renames)
-    df = df[~df['position'].str.upper().str.contains('GK', na=False)]
+
+    # Фильтр вратарей – только если колонка position существует
+    if 'position' in df.columns:
+        df = df[~df['position'].str.upper().str.contains('GK', na=False)]
+    else:
+        st.warning("Колонка 'position' не найдена в Excel – фильтрация вратарей пропущена")
 
     conn = psycopg2.connect(**get_db_config())
     conn.autocommit = True
@@ -652,9 +657,12 @@ def import_season_excel(uploaded_file_content, league_name, season):
 
     inserted = 0
     for _, row in df.iterrows():
-        player = row['player']
-        team_name = row['team']
-        pos = row['position'] if pd.notna(row['position']) else ''
+        player = row.get('player', '')
+        team_name = row.get('team', '')
+        pos = row.get('position', '')
+
+        if not player or not team_name:
+            continue
 
         cur.execute("SELECT id FROM teams WHERE name = %s AND league_id = %s", (team_name, league_id))
         team_row = cur.fetchone()
@@ -690,7 +698,7 @@ def import_season_excel(uploaded_file_content, league_name, season):
     conn.close()
     return inserted
 
-# -------------------- ИМПОРТ МАТЧА (С ВЫБОРОМ КОМАНДЫ) --------------------
+
 def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label, which_team='both'):
     try:
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
@@ -701,7 +709,12 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
     df = df.dropna(subset=['№'])
     existing_renames = {k: v for k, v in RENAME_DICT_IMPORT.items() if k in df.columns}
     df = df.rename(columns=existing_renames)
-    df = df[~df['position'].str.upper().str.contains('GK', na=False)]
+
+    # Фильтр вратарей – только если колонка position существует
+    if 'position' in df.columns:
+        df = df[~df['position'].str.upper().str.contains('GK', na=False)]
+    else:
+        st.warning("Колонка 'position' не найдена в Excel – фильтрация вратарей пропущена")
 
     # Фильтр по выбранной команде
     if which_team == 'home':
@@ -745,9 +758,12 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
     stats_fields_match = [f for f in STATS_FIELDS_SEASON if f != 'season']
 
     for _, row in df.iterrows():
-        player_name = row['player']
-        team_name = row['team']
-        pos = row['position'] if pd.notna(row['position']) else ''
+        player_name = row.get('player', '')
+        team_name = row.get('team', '')
+        pos = row.get('position', '')
+
+        if not player_name or not team_name:
+            continue
 
         cur.execute("SELECT id FROM players WHERE name = %s", (player_name,))
         player_row = cur.fetchone()
