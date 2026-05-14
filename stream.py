@@ -720,7 +720,6 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
         st.error("В файле нет колонки 'Player'. Импорт невозможен.")
         return None
 
-    # Присваиваем команду в зависимости от выбора пользователя
     if which_team == 'home':
         df['team'] = home_team
     else:
@@ -877,7 +876,7 @@ def get_teams_for_league(league_name):
         return []
 
 @st.cache_data(ttl=60)
-def get_matches():
+def get_matches_for_league(league_name):
     try:
         conn = psycopg2.connect(**get_db_config())
         cur = conn.cursor()
@@ -888,8 +887,9 @@ def get_matches():
             JOIN leagues l ON m.league_id = l.id
             JOIN teams ht ON m.home_team_id = ht.id
             JOIN teams at ON m.away_team_id = at.id
+            WHERE l.name = %s
             ORDER BY m.match_date DESC, m.id DESC
-        """)
+        """, (league_name,))
         matches = cur.fetchall()
         cur.close()
         conn.close()
@@ -1179,12 +1179,10 @@ st.title("Анализ футболистов InStat")
 
 if 'df_db' not in st.session_state:
     st.session_state.df_db = None
-if 'df_match' not in st.session_state:
-    st.session_state.df_match = None
+if 'df_matches' not in st.session_state:
+    st.session_state.df_matches = {}   # {match_id: {'df': DataFrame, 'pos_tables': dict, 'label': str}}
 if 'position_tables' not in st.session_state:
     st.session_state.position_tables = {}
-if 'position_tables_match' not in st.session_state:
-    st.session_state.position_tables_match = {}
 if 'current_settings' not in st.session_state:
     st.session_state.current_settings = load_settings()
 if 'selected_main_metrics' not in st.session_state:
@@ -1302,39 +1300,66 @@ with st.sidebar:
         st.info("Выберите лигу и сезон")
 
     st.header("⚽ Матчевая статистика")
-    matches = get_matches()
-    if not matches:
-        st.info("Нет загруженных матчей")
+    # Выбор лиги
+    all_leagues = get_leagues()
+    if not all_leagues:
+        st.warning("Нет лиг в базе")
     else:
-        match_options = [f"#{m[0]} {m[1]} ({m[2]}, {m[3]}) {m[4]} vs {m[5]}" for m in matches]
-        selected_match_label = st.selectbox("Выберите матч", match_options, key="match_select")
-        if selected_match_label:
-            match_id = int(selected_match_label.split()[0][1:])
-            match_info = next(m for m in matches if m[0] == match_id)
-            home_team = match_info[4]
-            away_team = match_info[5]
-            team_choice = st.radio("Команда", [home_team, away_team], key="match_team_choice")
-            if st.button("Загрузить матч", use_container_width=True):
-                with st.spinner("Загрузка матча..."):
-                    team_ids = None
-                    conn = psycopg2.connect(**get_db_config())
-                    cur = conn.cursor()
-                    cur.execute("SELECT id FROM teams WHERE name = %s", (team_choice,))
-                    tid = cur.fetchone()
-                    if tid:
-                        team_ids = [tid[0]]
-                    cur.close()
-                    conn.close()
-                    df_match = load_match_stats(match_id, team_ids)
-                    if df_match.empty:
-                        st.error("Нет данных")
-                    else:
-                        df_match['league'] = 'match'
-                        df_match = calculate_ratings(df_match, st.session_state.current_settings)
-                        df_match = df_match.sort_values('rating', ascending=False).reset_index(drop=True)
-                        st.session_state.df_match = df_match
-                        st.session_state.position_tables_match = build_position_tables(df_match, st.session_state.current_settings)
-                        st.success(f"Загружено {len(df_match)} игроков")
+        match_league_analysis = st.selectbox("Лига", all_leagues, key="match_analysis_league")
+        matches_in_league = get_matches_for_league(match_league_analysis)
+        if not matches_in_league:
+            st.info("Нет матчей в выбранной лиге")
+        else:
+            # Мультиселект матчей
+            match_options = [f"#{m[0]} {m[1]} ({m[3]}) {m[4]} vs {m[5]}" for m in matches_in_league]
+            selected_matches_labels = st.multiselect("Выберите матчи", match_options, key="match_multiselect")
+            if selected_matches_labels:
+                # Определяем команды, которые можно выбрать (берём из первого матча, но можно расширить)
+                teams_in_league = get_teams_for_league(match_league_analysis)
+                team_choice = st.radio("Команда", ["Обе", "Хозяева", "Гости"], key="match_team_choice")
+                if st.button("Загрузить матчи", use_container_width=True):
+                    with st.spinner("Загрузка матчей..."):
+                        new_matches = {}
+                        for label in selected_matches_labels:
+                            match_id = int(label.split()[0][1:])
+                            match_info = next(m for m in matches_in_league if m[0] == match_id)
+                            home_team = match_info[4]
+                            away_team = match_info[5]
+                            # Определяем team_ids для фильтрации
+                            team_ids = None
+                            if team_choice == "Хозяева":
+                                conn = psycopg2.connect(**get_db_config())
+                                cur = conn.cursor()
+                                cur.execute("SELECT id FROM teams WHERE name = %s", (home_team,))
+                                tid = cur.fetchone()
+                                if tid: team_ids = [tid[0]]
+                                cur.close()
+                                conn.close()
+                            elif team_choice == "Гости":
+                                conn = psycopg2.connect(**get_db_config())
+                                cur = conn.cursor()
+                                cur.execute("SELECT id FROM teams WHERE name = %s", (away_team,))
+                                tid = cur.fetchone()
+                                if tid: team_ids = [tid[0]]
+                                cur.close()
+                                conn.close()
+                            # else "Обе" – team_ids = None
+                            df_match = load_match_stats(match_id, team_ids)
+                            if not df_match.empty:
+                                df_match['league'] = 'match'
+                                df_match = calculate_ratings(df_match, st.session_state.current_settings)
+                                df_match = df_match.sort_values('rating', ascending=False).reset_index(drop=True)
+                                pos_tables = build_position_tables(df_match, st.session_state.current_settings)
+                                new_matches[match_id] = {
+                                    'df': df_match,
+                                    'pos_tables': pos_tables,
+                                    'label': label
+                                }
+                        if new_matches:
+                            st.session_state.df_matches = new_matches
+                            st.success(f"Загружено {len(new_matches)} матчей")
+                        else:
+                            st.warning("Нет данных по выбранным матчам")
 
     # Настройки весов (общие)
     st.header("⚙️ Веса")
@@ -1348,9 +1373,10 @@ with st.sidebar:
         if st.session_state.df_db is not None:
             st.session_state.df_db = calculate_ratings(st.session_state.df_db, st.session_state.current_settings)
             st.session_state.position_tables = build_position_tables(st.session_state.df_db, st.session_state.current_settings)
-        if st.session_state.df_match is not None:
-            st.session_state.df_match = calculate_ratings(st.session_state.df_match, st.session_state.current_settings)
-            st.session_state.position_tables_match = build_position_tables(st.session_state.df_match, st.session_state.current_settings)
+        # Пересчёт всех загруженных матчей
+        for mid, data in st.session_state.df_matches.items():
+            data['df'] = calculate_ratings(data['df'], st.session_state.current_settings)
+            data['pos_tables'] = build_position_tables(data['df'], st.session_state.current_settings)
 
     st.header("📊 Средние")
     avg_source = st.radio("Источник", ["Текущие данные", "Лига из БД"], key="avg_source")
@@ -1465,107 +1491,119 @@ with tab_season:
         st.info("Загрузите сезонные данные (в боковой панели)")
 
 with tab_match:
-    if st.session_state.df_match is not None:
-        df_active = st.session_state.df_match
-        position_tables_active = st.session_state.position_tables_match
+    if st.session_state.df_matches:
+        match_ids = list(st.session_state.df_matches.keys())
+        # Переключатель между матчами
+        match_labels = [st.session_state.df_matches[mid]['label'] for mid in match_ids]
+        selected_label = st.selectbox("Активный матч", match_labels, key="active_match_selector")
+        # Находим id выбранного матча
+        active_match_id = None
+        for mid, data in st.session_state.df_matches.items():
+            if data['label'] == selected_label:
+                active_match_id = mid
+                break
 
-        all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
-        metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in all_metrics}
-        with st.expander("Настройка колонок общей таблицы"):
-            selected_metrics = st.multiselect(
-                "Выберите до 5 метрик для отображения",
-                options=all_metrics,
-                format_func=lambda m: metric_names[m],
-                default=all_metrics[:3],
-                max_selections=5,
-                key="match_main_metrics_selector"
-            )
-        if not selected_metrics:
-            selected_metrics = all_metrics[:3]
+        if active_match_id is not None:
+            df_active = st.session_state.df_matches[active_match_id]['df']
+            position_tables_active = st.session_state.df_matches[active_match_id]['pos_tables']
 
-        subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
+            all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
+            metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in all_metrics}
+            with st.expander("Настройка колонок общей таблицы"):
+                selected_metrics = st.multiselect(
+                    "Выберите до 5 метрик для отображения",
+                    options=all_metrics,
+                    format_func=lambda m: metric_names[m],
+                    default=all_metrics[:3],
+                    max_selections=5,
+                    key="match_main_metrics_selector"
+                )
+            if not selected_metrics:
+                selected_metrics = all_metrics[:3]
 
-        with subtabs[0]:
-            df_main = build_main_table(df_active, selected_metrics)
-            st.dataframe(df_main, height=600, use_container_width=True, on_select="rerun", selection_mode="single-row", key="match_main_table")
-            if "match_main_table" in st.session_state and st.session_state.match_main_table.selection.rows:
-                idx = next(iter(st.session_state.match_main_table.selection.rows))
-                if idx < len(df_active):
-                    player_row = df_active.iloc[idx]
-                    col1, col2, col3 = st.columns([1, 2, 1])
-                    pos = get_position_group(player_row['position'])
-                    weights = st.session_state.current_settings.get(pos, {})
-                    sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
-                    radar_metrics = [m for m, _ in sorted_metrics if m in df_active.columns][:8]
-                    if not radar_metrics:
-                        radar_metrics = [c for c in df_active.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-                    avg_series = get_average_series(radar_metrics, df_active)
-                    with col2:
-                        fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
-                        st.plotly_chart(fig, use_container_width=True)
+            subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
 
-        for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
-            with subtabs[i]:
-                rows, headers = position_tables_active.get(pos, ([], []))
-                if rows:
-                    numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
-                    df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
-                    st.dataframe(df_pos, height=400, use_container_width=True, on_select="rerun", selection_mode="single-row", key=f"match_table_{pos}")
-                    state_key = f"match_table_{pos}"
-                    if state_key in st.session_state and st.session_state[state_key].selection.rows:
-                        idx = next(iter(st.session_state[state_key].selection.rows))
-                        if idx < len(rows):
-                            player_name = rows[idx][0]
-                            player_min = int(rows[idx][1])
-                            candidate = df_active[(df_active['player'] == player_name) & (df_active['minutes'] == player_min)]
-                            if not candidate.empty:
-                                player_row = candidate.iloc[0]
-                                pos_group = get_position_group(player_row['position'])
-                                weights = st.session_state.current_settings.get(pos_group, {})
-                                sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
-                                radar_metrics = [m for m, _ in sorted_metrics if m in df_active.columns][:8]
-                                if not radar_metrics:
-                                    radar_metrics = [c for c in df_active.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
-                                avg_series = get_average_series(radar_metrics, df_active)
-                                col1, col2, col3 = st.columns([1, 2, 1])
-                                with col2:
-                                    fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
-                                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info(f"Нет игроков позиции {pos}")
-
-        if st.button("📥 Экспорт в Excel", key="export_match"):
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            with subtabs[0]:
                 df_main = build_main_table(df_active, selected_metrics)
-                df_main.to_excel(writer, sheet_name='Общий рейтинг', index=False)
-                for pos, (rows, headers) in position_tables_active.items():
+                st.dataframe(df_main, height=600, use_container_width=True, on_select="rerun", selection_mode="single-row", key="match_main_table")
+                if "match_main_table" in st.session_state and st.session_state.match_main_table.selection.rows:
+                    idx = next(iter(st.session_state.match_main_table.selection.rows))
+                    if idx < len(df_active):
+                        player_row = df_active.iloc[idx]
+                        col1, col2, col3 = st.columns([1, 2, 1])
+                        pos = get_position_group(player_row['position'])
+                        weights = st.session_state.current_settings.get(pos, {})
+                        sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
+                        radar_metrics = [m for m, _ in sorted_metrics if m in df_active.columns][:8]
+                        if not radar_metrics:
+                            radar_metrics = [c for c in df_active.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                        avg_series = get_average_series(radar_metrics, df_active)
+                        with col2:
+                            fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
+                            st.plotly_chart(fig, use_container_width=True)
+
+            for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
+                with subtabs[i]:
+                    rows, headers = position_tables_active.get(pos, ([], []))
                     if rows:
-                        df_pos = pd.DataFrame(rows, columns=headers)
-                        df_pos.to_excel(writer, sheet_name=pos, index=False)
-                        from openpyxl.formatting.rule import ColorScaleRule
-                        from openpyxl.utils import get_column_letter
-                        ws = writer.sheets[pos]
-                        metric_columns = list(range(4, 4 + len(headers) - 3))
-                        for col_idx in metric_columns:
-                            col_letter = get_column_letter(col_idx)
-                            max_row = len(rows) + 1
-                            ws.conditional_formatting.add(
-                                f'{col_letter}2:{col_letter}{max_row}',
-                                ColorScaleRule(start_type='min', start_color='FFC7CE',
-                                              mid_type='percentile', mid_value=50, mid_color='FFFFEB',
-                                              end_type='max', end_color='C6EFCE')
-                            )
-            st.download_button(label="Скачать Excel", data=output.getvalue(), file_name="match_players_rating.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                        numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
+                        df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
+                        st.dataframe(df_pos, height=400, use_container_width=True, on_select="rerun", selection_mode="single-row", key=f"match_table_{pos}")
+                        state_key = f"match_table_{pos}"
+                        if state_key in st.session_state and st.session_state[state_key].selection.rows:
+                            idx = next(iter(st.session_state[state_key].selection.rows))
+                            if idx < len(rows):
+                                player_name = rows[idx][0]
+                                player_min = int(rows[idx][1])
+                                candidate = df_active[(df_active['player'] == player_name) & (df_active['minutes'] == player_min)]
+                                if not candidate.empty:
+                                    player_row = candidate.iloc[0]
+                                    pos_group = get_position_group(player_row['position'])
+                                    weights = st.session_state.current_settings.get(pos_group, {})
+                                    sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
+                                    radar_metrics = [m for m, _ in sorted_metrics if m in df_active.columns][:8]
+                                    if not radar_metrics:
+                                        radar_metrics = [c for c in df_active.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                                    avg_series = get_average_series(radar_metrics, df_active)
+                                    col1, col2, col3 = st.columns([1, 2, 1])
+                                    with col2:
+                                        fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
+                                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info(f"Нет игроков позиции {pos}")
+
+            if st.button("📥 Экспорт в Excel", key="export_match"):
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_main = build_main_table(df_active, selected_metrics)
+                    df_main.to_excel(writer, sheet_name='Общий рейтинг', index=False)
+                    for pos, (rows, headers) in position_tables_active.items():
+                        if rows:
+                            df_pos = pd.DataFrame(rows, columns=headers)
+                            df_pos.to_excel(writer, sheet_name=pos, index=False)
+                            from openpyxl.formatting.rule import ColorScaleRule
+                            from openpyxl.utils import get_column_letter
+                            ws = writer.sheets[pos]
+                            metric_columns = list(range(4, 4 + len(headers) - 3))
+                            for col_idx in metric_columns:
+                                col_letter = get_column_letter(col_idx)
+                                max_row = len(rows) + 1
+                                ws.conditional_formatting.add(
+                                    f'{col_letter}2:{col_letter}{max_row}',
+                                    ColorScaleRule(start_type='min', start_color='FFC7CE',
+                                                  mid_type='percentile', mid_value=50, mid_color='FFFFEB',
+                                                  end_type='max', end_color='C6EFCE')
+                                )
+                st.download_button(label="Скачать Excel", data=output.getvalue(), file_name="match_players_rating.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
-        st.info("Загрузите матч (в боковой панели)")
+        st.info("Загрузите матчи (в боковой панели)")
 
 # -------------------- РЕДАКТОР ВЕСОВ --------------------
 if st.session_state.get('show_weights_editor'):
     with st.expander("Редактор весов метрик", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
         pos_names = {'FW':'Нападающие','AM':'Атак. полузащитники','CM':'Центр. полузащитники','FB':'Крайние защитники','CB':'Центр. защитники'}
-        active_df = st.session_state.df_db if st.session_state.df_db is not None else st.session_state.df_match
+        active_df = st.session_state.df_db if st.session_state.df_db is not None else (st.session_state.df_matches[list(st.session_state.df_matches.keys())[0]]['df'] if st.session_state.df_matches else None)
         if active_df is not None:
             available_metrics = [m for m in ALL_POSSIBLE_METRICS if m in active_df.columns]
         else:
@@ -1605,9 +1643,9 @@ if st.session_state.get('show_weights_editor'):
                 if st.session_state.df_db is not None:
                     st.session_state.df_db = calculate_ratings(st.session_state.df_db, new_weights)
                     st.session_state.position_tables = build_position_tables(st.session_state.df_db, new_weights)
-                if st.session_state.df_match is not None:
-                    st.session_state.df_match = calculate_ratings(st.session_state.df_match, new_weights)
-                    st.session_state.position_tables_match = build_position_tables(st.session_state.df_match, new_weights)
+                for mid, data in st.session_state.df_matches.items():
+                    data['df'] = calculate_ratings(data['df'], new_weights)
+                    data['pos_tables'] = build_position_tables(data['df'], new_weights)
                 st.rerun()
         with col2:
             if st.button("Отмена", use_container_width=True, key="cancel_weights"):
