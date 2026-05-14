@@ -73,12 +73,64 @@ ALL_POSSIBLE_METRICS = [
     'open_passes_received_opponent_box_p90',
 ]
 
+# Метрики для матчей (без _p90 и с процентами)
+MATCH_POSSIBLE_METRICS = [
+    'goals', 'assists', 'shots', 'shots_on_target',
+    'goals_by_head', 'free_kick_shots', 'free_kick_goals',
+    'shots_from_penalty_area', 'shots_on_target_penalty_area',
+    'shots_outside_penalty_area', 'shots_on_target_outside_penalty_area',
+    'headers', 'headers_on_target',
+    'xG',
+    'key_passes', 'passes', 'pass_accuracy',
+    'short_passes', 'short_passes_accuracy',
+    'long_passes', 'long_passes_accuracy',
+    'progressive_passes', 'progressive_passes_accuracy',
+    'passes_final_third', 'passes_final_third_accuracy',
+    'passes_into_penalty_box', 'passes_into_penalty_box_accuracy',
+    'super_long_passes', 'super_long_passes_accuracy',
+    'crosses', 'crosses_accuracy',
+    'passes_for_shot',
+    'dribbles', 'dribbles_success_pct',
+    'dribbling_final_third', 'dribbling_final_third_success_pct',
+    'carry',
+    'challenges', 'challenges_won_pct',
+    'defensive_challenges', 'defensive_challenges_won_pct',
+    'attacking_challenges', 'attacking_challenges_won_pct',
+    'air_challenges', 'air_challenges_won_pct',
+    'tackles', 'tackles_success_pct',
+    'interceptions',
+    'loose_ball_recoveries',
+    'actions_opp_box', 'actions_opp_box_success',
+    'chances', 'chances_successful',
+    'chances_created',
+    'involvement_scoring',
+    'shots_on_target_pct',
+    'lost_balls', 'lost_balls_own_half', 'individual_ball_losses',
+    'lost_balls_after_passes',
+    'challenges_unsuccessful', 'dribbles_unsuccessful',
+    'bad_ball_control', 'offsides',
+    'mistakes_goals', 'mistakes_chances',
+    'fouls', 'fouls_suffered',
+    'yellow_cards', 'red_cards',
+    'ball_recoveries', 'ball_recoveries_opp_half',
+    'actions_successful', 'actions_unsuccessful',
+    'final_third_entries', 'final_third_carry',
+    'final_third_entries_pass',
+    'open_passes_received',
+    'long_open_passes_received',
+    'super_long_open_passes_received',
+    'open_passes_received_first_third',
+    'open_passes_received_central_third',
+    'open_passes_received_final_third',
+    'open_passes_received_opponent_box',
+]
+
 NEGATIVE_METRICS = [
-    'lost_balls_p90', 'lost_balls_own_half_p90', 'individual_ball_losses_p90',
-    'lost_balls_after_passes_p90', 'challenges_unsuccessful_p90',
-    'dribbles_unsuccessful_p90', 'bad_ball_control_p90', 'offsides_p90',
-    'yellow_cards_p90', 'red_cards_p90', 'mistakes_goals_p90', 'mistakes_chances_p90',
-    'fouls_p90', 'actions_unsuccessful_p90',
+    'lost_balls', 'lost_balls_own_half', 'individual_ball_losses',
+    'lost_balls_after_passes', 'challenges_unsuccessful',
+    'dribbles_unsuccessful', 'bad_ball_control', 'offsides',
+    'yellow_cards', 'red_cards', 'mistakes_goals', 'mistakes_chances',
+    'fouls', 'actions_unsuccessful',
 ]
 
 DEFAULT_METRICS_WEIGHTS = {
@@ -125,10 +177,25 @@ DEFAULT_METRICS_WEIGHTS = {
     },
 }
 
+# Копируем веса для матчей (без _p90)
+DEFAULT_MATCH_WEIGHTS = {}
+for pos, weights in DEFAULT_METRICS_WEIGHTS.items():
+    new_weights = {}
+    for metric, w in weights.items():
+        if metric.endswith('_p90'):
+            new_weights[metric.replace('_p90', '')] = w
+        else:
+            new_weights[metric] = w
+    DEFAULT_MATCH_WEIGHTS[pos] = new_weights
+
 for pos in DEFAULT_METRICS_WEIGHTS:
     for m in ALL_POSSIBLE_METRICS:
         if m not in DEFAULT_METRICS_WEIGHTS[pos]:
             DEFAULT_METRICS_WEIGHTS[pos][m] = 0.0
+for pos in DEFAULT_MATCH_WEIGHTS:
+    for m in MATCH_POSSIBLE_METRICS:
+        if m not in DEFAULT_MATCH_WEIGHTS[pos]:
+            DEFAULT_MATCH_WEIGHTS[pos][m] = 0.0
 
 METRIC_NAMES_RU = {
     'goals_p90': 'Голы', 'assists_p90': 'Голевые передачи',
@@ -200,6 +267,14 @@ METRIC_NAMES_RU = {
     'open_passes_received_final_third_p90': 'Принято в финальной трети',
     'open_passes_received_opponent_box_p90': 'Принято в штрафной',
 }
+
+# Русские названия для матчевых метрик (без _p90)
+MATCH_METRIC_NAMES_RU = {}
+for k, v in METRIC_NAMES_RU.items():
+    if k.endswith('_p90'):
+        MATCH_METRIC_NAMES_RU[k.replace('_p90', '')] = v
+    else:
+        MATCH_METRIC_NAMES_RU[k] = v
 
 # -------------------- БЕЗОПАСНОЕ ПОДКЛЮЧЕНИЕ К БД --------------------
 def get_db_config():
@@ -315,33 +390,66 @@ def _calculate_ratings_for_group(df, position_weights):
     return df
 
 def format_metric_with_detail(metric, value, player_row):
-    if metric.endswith('_pct') or metric == 'pass_accuracy':
+    """Возвращает строку с числом и, если возможно, расшифровкой успешные/всего"""
+    # Процентные метрики (accuracy, success_pct и т.п.)
+    if metric.endswith('_accuracy') or metric.endswith('_success_pct') or metric == 'shots_on_target_pct':
+        # Ищем соответствующее поле с общим количеством
         base_col = None
         if metric == 'pass_accuracy': base_col = 'passes'
+        elif metric == 'short_passes_accuracy': base_col = 'short_passes'
+        elif metric == 'long_passes_accuracy': base_col = 'long_passes'
+        elif metric == 'progressive_passes_accuracy': base_col = 'progressive_passes'
+        elif metric == 'passes_final_third_accuracy': base_col = 'passes_final_third'
+        elif metric == 'passes_into_penalty_box_accuracy': base_col = 'passes_into_penalty_box'
+        elif metric == 'super_long_passes_accuracy': base_col = 'super_long_passes'
+        elif metric == 'crosses_accuracy': base_col = 'crosses'
         elif metric == 'dribbles_success_pct': base_col = 'dribbles'
+        elif metric == 'dribbling_final_third_success_pct': base_col = 'dribbling_final_third'
         elif metric == 'tackles_success_pct': base_col = 'tackles'
         elif metric == 'challenges_won_pct': base_col = 'challenges'
         elif metric == 'air_challenges_won_pct': base_col = 'air_challenges'
-        elif metric == 'crosses_accuracy': base_col = 'crosses'
-        elif metric == 'progressive_passes_accuracy': base_col = 'progressive_passes'
-        elif metric == 'passes_final_third_accuracy': base_col = 'passes_final_third'
-        elif metric == 'short_passes_accuracy': base_col = 'short_passes'
-        elif metric == 'long_passes_accuracy': base_col = 'long_passes'
-        elif metric == 'passes_into_penalty_box_accuracy': base_col = 'passes_into_penalty_box'
-        elif metric == 'super_long_passes_accuracy': base_col = 'super_long_passes'
-        elif metric == 'dribbling_final_third_success_pct': base_col = 'dribbling_final_third'
         elif metric == 'defensive_challenges_won_pct': base_col = 'defensive_challenges'
         elif metric == 'attacking_challenges_won_pct': base_col = 'attacking_challenges'
+        elif metric == 'shots_on_target_pct': base_col = 'shots'
         if base_col and base_col in player_row:
             total = player_row[base_col]
             if pd.notna(total) and total > 0:
                 successful = int(round(total * value / 100))
                 return f"{value:.1f}% ({successful}/{int(total)})"
         return f"{value:.1f}%"
-    else:
-        return f"{value:.2f}"
+    # Метрики с явным разделением на "успешные" и "всего" (actions_successful, passes_final_third_success и т.п.)
+    # Сначала проверяем пары: если есть поле "_success" или "_successful", рядом может быть общее
+    if metric.endswith('_successful') or metric.endswith('_success'):
+        base_metric = metric.replace('_successful', '').replace('_success', '')
+        if base_metric in player_row:
+            total = player_row[base_metric]
+            if pd.notna(total) and total > 0:
+                return f"{int(value)} / {int(total)}"
+    # Попробуем найти пару для "progressive_passes" -> "progressive_passes_accuracy" и т.п.
+    if metric in ['progressive_passes', 'passes_final_third', 'passes_into_penalty_box', 'super_long_passes', 'crosses', 'dribbles', 'tackles', 'challenges', 'air_challenges', 'defensive_challenges', 'attacking_challenges', 'shots']:
+        acc_col = metric + '_accuracy' if metric != 'dribbles' else 'dribbles_success_pct'
+        if metric == 'tackles': acc_col = 'tackles_success_pct'
+        if metric == 'challenges': acc_col = 'challenges_won_pct'
+        if metric == 'air_challenges': acc_col = 'air_challenges_won_pct'
+        if metric == 'defensive_challenges': acc_col = 'defensive_challenges_won_pct'
+        if metric == 'attacking_challenges': acc_col = 'attacking_challenges_won_pct'
+        if metric == 'shots': acc_col = 'shots_on_target_pct'
+        if acc_col in player_row:
+            total = player_row[metric]
+            if pd.notna(total) and total > 0:
+                successful = int(round(total * player_row[acc_col] / 100)) if pd.notna(player_row[acc_col]) else None
+                if successful is not None:
+                    return f"{successful} / {int(total)}"
+    # Для всех остальных метрик показываем просто значение, если есть actions_successful
+    if metric.endswith('_successful') or metric.endswith('_success'):
+        base_metric = metric.replace('_successful', '').replace('_success', '')
+        if base_metric in player_row:
+            total = player_row[base_metric]
+            if pd.notna(total) and total > 0:
+                return f"{int(value)} / {int(total)}"
+    return f"{value:.2f}"
 
-def build_position_tables(df, position_weights):
+def build_position_tables(df, position_weights, metric_names_ru):
     tables = {}
     positions = ['FW', 'AM', 'CM', 'FB', 'CB']
     for pos in positions:
@@ -383,11 +491,11 @@ def build_position_tables(df, position_weights):
                 row_data.append(formatted)
             rows.append(row_data)
 
-        headers = ['Игрок', 'Мин', 'Рейтинг'] + [METRIC_NAMES_RU.get(m, m) for m in metrics]
+        headers = ['Игрок', 'Мин', 'Рейтинг'] + [metric_names_ru.get(m, m) for m in metrics]
         tables[pos] = (rows, headers)
     return tables
 
-def build_main_table(df, selected_metrics):
+def build_main_table(df, selected_metrics, metric_names_ru):
     metrics = [m for m in selected_metrics if m in df.columns]
     if not metrics:
         return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
@@ -406,7 +514,7 @@ def build_main_table(df, selected_metrics):
     max_vals = {m: norm_cols[m].max() for m in metrics}
     min_vals = {m: norm_cols[m].min() for m in metrics}
 
-    main_headers = ['№','Игрок','Поз','Мин','Рейтинг'] + [METRIC_NAMES_RU.get(m, m) for m in metrics]
+    main_headers = ['№','Игрок','Поз','Мин','Рейтинг'] + [metric_names_ru.get(m, m) for m in metrics]
     main_data = []
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         row_data = [i, row['player'], row['position'], int(row['minutes']), f"{row['rating']:.1f}"]
@@ -977,42 +1085,7 @@ def load_match_stats(match_id, team_ids=None):
             if df[col].max() <= 1.0:
                 df[col] = df[col] * 100
 
-    minutes = pd.to_numeric(df['minutes'], errors='coerce').fillna(0)
-    stats_to_norm = [
-        'goals', 'assists', 'shots', 'shots_on_target',
-        'goals_by_head', 'free_kick_shots', 'free_kick_goals',
-        'shots_from_penalty_area', 'shots_on_target_penalty_area',
-        'shots_outside_penalty_area', 'shots_on_target_outside_penalty_area',
-        'headers', 'headers_on_target',
-        'xG', 'key_passes', 'passes',
-        'short_passes', 'long_passes',
-        'progressive_passes', 'passes_final_third',
-        'passes_into_penalty_box', 'super_long_passes',
-        'crosses', 'passes_for_shot',
-        'dribbles', 'dribbling_final_third', 'carry',
-        'challenges', 'defensive_challenges', 'attacking_challenges',
-        'air_challenges', 'tackles', 'interceptions',
-        'loose_ball_recoveries', 'actions_opp_box', 'actions_opp_box_success',
-        'chances', 'chances_successful', 'chances_created',
-        'involvement_scoring',
-        'lost_balls', 'lost_balls_own_half', 'individual_ball_losses',
-        'lost_balls_after_passes', 'challenges_unsuccessful',
-        'dribbles_unsuccessful', 'bad_ball_control', 'offsides',
-        'mistakes_goals', 'mistakes_chances',
-        'fouls', 'fouls_suffered', 'yellow_cards', 'red_cards',
-        'ball_recoveries', 'ball_recoveries_opp_half',
-        'actions', 'actions_successful', 'actions_unsuccessful',
-        'final_third_entries', 'final_third_carry', 'final_third_entries_pass',
-        'open_passes_received', 'long_open_passes_received',
-        'super_long_open_passes_received',
-        'open_passes_received_first_third', 'open_passes_received_central_third',
-        'open_passes_received_final_third', 'open_passes_received_opponent_box',
-    ]
-    for col in stats_to_norm:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            df[f'{col}_p90'] = np.where(minutes > 0, (df[col] / minutes) * 90, 0)
-
+    # Для матчей НЕ нормализуем на 90 минут – оставляем абсолютные значения
     return df
 
 # -------------------- ВИЗУАЛИЗАЦИЯ (Plotly) --------------------
@@ -1030,21 +1103,20 @@ def normalize_for_radar(df, metrics, player_row):
             normed[m] = 1.0 - normed[m]
     return normed
 
-def build_radar_labels(metrics, players, avg_series=None):
+def build_radar_labels(metrics, players, avg_series=None, metric_names_ru=None):
+    if metric_names_ru is None:
+        metric_names_ru = METRIC_NAMES_RU
     labels = []
     for m in metrics:
-        name = METRIC_NAMES_RU.get(m, m)
+        name = metric_names_ru.get(m, m)
         lines = [name]
         for p in players:
             val = p[m]
-            if m.endswith('_pct') or m == 'pass_accuracy':
-                detail = format_metric_with_detail(m, val, p)
-            else:
-                detail = f"{val:.2f}"
+            detail = format_metric_with_detail(m, val, p)
             lines.append(f"{p['player']}: {detail}")
         if avg_series is not None and m in avg_series:
             avg_val = avg_series[m]
-            if m.endswith('_pct') or m == 'pass_accuracy':
+            if m.endswith('_accuracy') or m.endswith('_success_pct') or m == 'shots_on_target_pct':
                 avg_detail = f"{avg_val:.2f}%"
             else:
                 avg_detail = f"{avg_val:.2f}"
@@ -1066,15 +1138,17 @@ def add_average_trace(fig, radar_metrics, avg_values, labels, full_df):
         opacity=0.4,
     ))
 
-def create_player_radar_figure(player_row, df, position_weights, avg_values=None):
+def create_player_radar_figure(player_row, df, position_weights, avg_values=None, metric_names_ru=None):
+    if metric_names_ru is None:
+        metric_names_ru = METRIC_NAMES_RU
     pos = get_position_group(player_row['position'])
     weights = position_weights.get(pos, {})
     sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
     radar_metrics = [m for m, _ in sorted_metrics if m in df.columns][:8]
     if not radar_metrics:
-        radar_metrics = [c for c in df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+        radar_metrics = [c for c in df.columns if c in MATCH_POSSIBLE_METRICS][:8] if any(c in df.columns for c in MATCH_POSSIBLE_METRICS) else list(df.columns[:8])
 
-    labels = build_radar_labels(radar_metrics, [player_row], avg_series=avg_values)
+    labels = build_radar_labels(radar_metrics, [player_row], avg_series=avg_values, metric_names_ru=metric_names_ru)
     values = normalize_for_radar(df, radar_metrics, player_row).tolist()
 
     fig = go.Figure()
@@ -1096,9 +1170,11 @@ def create_player_radar_figure(player_row, df, position_weights, avg_values=None
     )
     return fig
 
-def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
+def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None, metric_names_ru=None):
+    if metric_names_ru is None:
+        metric_names_ru = METRIC_NAMES_RU
     players = [p1, p2]
-    labels = build_radar_labels(radar_metrics, players, avg_series=avg_values)
+    labels = build_radar_labels(radar_metrics, players, avg_series=avg_values, metric_names_ru=metric_names_ru)
 
     vals1 = normalize_for_radar(full_df, radar_metrics, p1).tolist()
     vals2 = normalize_for_radar(full_df, radar_metrics, p2).tolist()
@@ -1130,9 +1206,11 @@ def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
     )
     return fig
 
-def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values=None):
+def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values=None, metric_names_ru=None):
+    if metric_names_ru is None:
+        metric_names_ru = METRIC_NAMES_RU
     fig = go.Figure()
-    labels = build_radar_labels(pos_metrics[:8], players_data, avg_series=avg_values)
+    labels = build_radar_labels(pos_metrics[:8], players_data, avg_series=avg_values, metric_names_ru=metric_names_ru)
 
     for i, player_row in enumerate(players_data):
         values = normalize_for_radar(full_df, pos_metrics[:8], player_row).tolist()
@@ -1180,7 +1258,7 @@ st.title("Анализ футболистов InStat")
 if 'df_db' not in st.session_state:
     st.session_state.df_db = None
 if 'df_matches' not in st.session_state:
-    st.session_state.df_matches = {}   # {match_id: {'df': DataFrame, 'pos_tables': dict, 'label': str}}
+    st.session_state.df_matches = {}
 if 'position_tables' not in st.session_state:
     st.session_state.position_tables = {}
 if 'current_settings' not in st.session_state:
@@ -1293,14 +1371,13 @@ with st.sidebar:
                     df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
                     df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
                     st.session_state.df_db = df_filtered
-                    st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
+                    st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings, METRIC_NAMES_RU)
                     st.session_state.pop('position_compare_params', None)
                     st.success(f"Загружено {len(df_filtered)} игроков")
     else:
         st.info("Выберите лигу и сезон")
 
     st.header("⚽ Матчевая статистика")
-    # Выбор лиги
     all_leagues = get_leagues()
     if not all_leagues:
         st.warning("Нет лиг в базе")
@@ -1310,11 +1387,9 @@ with st.sidebar:
         if not matches_in_league:
             st.info("Нет матчей в выбранной лиге")
         else:
-            # Мультиселект матчей
             match_options = [f"#{m[0]} {m[1]} ({m[3]}) {m[4]} vs {m[5]}" for m in matches_in_league]
             selected_matches_labels = st.multiselect("Выберите матчи", match_options, key="match_multiselect")
             if selected_matches_labels:
-                # Определяем команды, которые можно выбрать (берём из первого матча, но можно расширить)
                 teams_in_league = get_teams_for_league(match_league_analysis)
                 team_choice = st.radio("Команда", ["Обе", "Хозяева", "Гости"], key="match_team_choice")
                 if st.button("Загрузить матчи", use_container_width=True):
@@ -1325,7 +1400,6 @@ with st.sidebar:
                             match_info = next(m for m in matches_in_league if m[0] == match_id)
                             home_team = match_info[4]
                             away_team = match_info[5]
-                            # Определяем team_ids для фильтрации
                             team_ids = None
                             if team_choice == "Хозяева":
                                 conn = psycopg2.connect(**get_db_config())
@@ -1343,13 +1417,12 @@ with st.sidebar:
                                 if tid: team_ids = [tid[0]]
                                 cur.close()
                                 conn.close()
-                            # else "Обе" – team_ids = None
                             df_match = load_match_stats(match_id, team_ids)
                             if not df_match.empty:
                                 df_match['league'] = 'match'
-                                df_match = calculate_ratings(df_match, st.session_state.current_settings)
+                                df_match = calculate_ratings(df_match, DEFAULT_MATCH_WEIGHTS)
                                 df_match = df_match.sort_values('rating', ascending=False).reset_index(drop=True)
-                                pos_tables = build_position_tables(df_match, st.session_state.current_settings)
+                                pos_tables = build_position_tables(df_match, DEFAULT_MATCH_WEIGHTS, MATCH_METRIC_NAMES_RU)
                                 new_matches[match_id] = {
                                     'df': df_match,
                                     'pos_tables': pos_tables,
@@ -1372,11 +1445,10 @@ with st.sidebar:
         st.success("Веса сброшены")
         if st.session_state.df_db is not None:
             st.session_state.df_db = calculate_ratings(st.session_state.df_db, st.session_state.current_settings)
-            st.session_state.position_tables = build_position_tables(st.session_state.df_db, st.session_state.current_settings)
-        # Пересчёт всех загруженных матчей
+            st.session_state.position_tables = build_position_tables(st.session_state.df_db, st.session_state.current_settings, METRIC_NAMES_RU)
         for mid, data in st.session_state.df_matches.items():
-            data['df'] = calculate_ratings(data['df'], st.session_state.current_settings)
-            data['pos_tables'] = build_position_tables(data['df'], st.session_state.current_settings)
+            data['df'] = calculate_ratings(data['df'], DEFAULT_MATCH_WEIGHTS)
+            data['pos_tables'] = build_position_tables(data['df'], DEFAULT_MATCH_WEIGHTS, MATCH_METRIC_NAMES_RU)
 
     st.header("📊 Средние")
     avg_source = st.radio("Источник", ["Текущие данные", "Лига из БД"], key="avg_source")
@@ -1416,7 +1488,7 @@ with tab_season:
         subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
 
         with subtabs[0]:
-            df_main = build_main_table(df_active, selected_metrics)
+            df_main = build_main_table(df_active, selected_metrics, METRIC_NAMES_RU)
             st.dataframe(df_main, height=600, use_container_width=True, on_select="rerun", selection_mode="single-row", key="main_table")
             if "main_table" in st.session_state and st.session_state.main_table.selection.rows:
                 idx = next(iter(st.session_state.main_table.selection.rows))
@@ -1431,7 +1503,7 @@ with tab_season:
                         radar_metrics = [c for c in df_active.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
                     avg_series = get_average_series(radar_metrics, df_active)
                     with col2:
-                        fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
+                        fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series, metric_names_ru=METRIC_NAMES_RU)
                         st.plotly_chart(fig, use_container_width=True)
 
         for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
@@ -1459,7 +1531,7 @@ with tab_season:
                                 avg_series = get_average_series(radar_metrics, df_active)
                                 col1, col2, col3 = st.columns([1, 2, 1])
                                 with col2:
-                                    fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
+                                    fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series, metric_names_ru=METRIC_NAMES_RU)
                                     st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info(f"Нет игроков позиции {pos}")
@@ -1467,7 +1539,7 @@ with tab_season:
         if st.button("📥 Экспорт в Excel", key="export_season"):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_main = build_main_table(df_active, selected_metrics)
+                df_main = build_main_table(df_active, selected_metrics, METRIC_NAMES_RU)
                 df_main.to_excel(writer, sheet_name='Общий рейтинг', index=False)
                 for pos, (rows, headers) in position_tables_active.items():
                     if rows:
@@ -1493,10 +1565,8 @@ with tab_season:
 with tab_match:
     if st.session_state.df_matches:
         match_ids = list(st.session_state.df_matches.keys())
-        # Переключатель между матчами
         match_labels = [st.session_state.df_matches[mid]['label'] for mid in match_ids]
         selected_label = st.selectbox("Активный матч", match_labels, key="active_match_selector")
-        # Находим id выбранного матча
         active_match_id = None
         for mid, data in st.session_state.df_matches.items():
             if data['label'] == selected_label:
@@ -1507,8 +1577,8 @@ with tab_match:
             df_active = st.session_state.df_matches[active_match_id]['df']
             position_tables_active = st.session_state.df_matches[active_match_id]['pos_tables']
 
-            all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
-            metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in all_metrics}
+            all_metrics = [m for m in MATCH_POSSIBLE_METRICS if m in df_active.columns]
+            metric_names = {m: MATCH_METRIC_NAMES_RU.get(m, m) for m in all_metrics}
             with st.expander("Настройка колонок общей таблицы"):
                 selected_metrics = st.multiselect(
                     "Выберите до 5 метрик для отображения",
@@ -1524,7 +1594,7 @@ with tab_match:
             subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
 
             with subtabs[0]:
-                df_main = build_main_table(df_active, selected_metrics)
+                df_main = build_main_table(df_active, selected_metrics, MATCH_METRIC_NAMES_RU)
                 st.dataframe(df_main, height=600, use_container_width=True, on_select="rerun", selection_mode="single-row", key="match_main_table")
                 if "match_main_table" in st.session_state and st.session_state.match_main_table.selection.rows:
                     idx = next(iter(st.session_state.match_main_table.selection.rows))
@@ -1532,14 +1602,14 @@ with tab_match:
                         player_row = df_active.iloc[idx]
                         col1, col2, col3 = st.columns([1, 2, 1])
                         pos = get_position_group(player_row['position'])
-                        weights = st.session_state.current_settings.get(pos, {})
+                        weights = DEFAULT_MATCH_WEIGHTS.get(pos, {})
                         sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
                         radar_metrics = [m for m, _ in sorted_metrics if m in df_active.columns][:8]
                         if not radar_metrics:
-                            radar_metrics = [c for c in df_active.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                            radar_metrics = [c for c in df_active.columns if c in MATCH_POSSIBLE_METRICS][:8]
                         avg_series = get_average_series(radar_metrics, df_active)
                         with col2:
-                            fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
+                            fig = create_player_radar_figure(player_row, df_active, DEFAULT_MATCH_WEIGHTS, avg_values=avg_series, metric_names_ru=MATCH_METRIC_NAMES_RU)
                             st.plotly_chart(fig, use_container_width=True)
 
             for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
@@ -1559,15 +1629,15 @@ with tab_match:
                                 if not candidate.empty:
                                     player_row = candidate.iloc[0]
                                     pos_group = get_position_group(player_row['position'])
-                                    weights = st.session_state.current_settings.get(pos_group, {})
+                                    weights = DEFAULT_MATCH_WEIGHTS.get(pos_group, {})
                                     sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
                                     radar_metrics = [m for m, _ in sorted_metrics if m in df_active.columns][:8]
                                     if not radar_metrics:
-                                        radar_metrics = [c for c in df_active.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
+                                        radar_metrics = [c for c in df_active.columns if c in MATCH_POSSIBLE_METRICS][:8]
                                     avg_series = get_average_series(radar_metrics, df_active)
                                     col1, col2, col3 = st.columns([1, 2, 1])
                                     with col2:
-                                        fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
+                                        fig = create_player_radar_figure(player_row, df_active, DEFAULT_MATCH_WEIGHTS, avg_values=avg_series, metric_names_ru=MATCH_METRIC_NAMES_RU)
                                         st.plotly_chart(fig, use_container_width=True)
                     else:
                         st.info(f"Нет игроков позиции {pos}")
@@ -1575,7 +1645,7 @@ with tab_match:
             if st.button("📥 Экспорт в Excel", key="export_match"):
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_main = build_main_table(df_active, selected_metrics)
+                    df_main = build_main_table(df_active, selected_metrics, MATCH_METRIC_NAMES_RU)
                     df_main.to_excel(writer, sheet_name='Общий рейтинг', index=False)
                     for pos, (rows, headers) in position_tables_active.items():
                         if rows:
@@ -1642,10 +1712,10 @@ if st.session_state.get('show_weights_editor'):
                 st.success("Веса обновлены. Данные пересчитываются...")
                 if st.session_state.df_db is not None:
                     st.session_state.df_db = calculate_ratings(st.session_state.df_db, new_weights)
-                    st.session_state.position_tables = build_position_tables(st.session_state.df_db, new_weights)
+                    st.session_state.position_tables = build_position_tables(st.session_state.df_db, new_weights, METRIC_NAMES_RU)
                 for mid, data in st.session_state.df_matches.items():
-                    data['df'] = calculate_ratings(data['df'], new_weights)
-                    data['pos_tables'] = build_position_tables(data['df'], new_weights)
+                    data['df'] = calculate_ratings(data['df'], DEFAULT_MATCH_WEIGHTS)
+                    data['pos_tables'] = build_position_tables(data['df'], DEFAULT_MATCH_WEIGHTS, MATCH_METRIC_NAMES_RU)
                 st.rerun()
         with col2:
             if st.button("Отмена", use_container_width=True, key="cancel_weights"):
