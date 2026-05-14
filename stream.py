@@ -79,7 +79,7 @@ NEGATIVE_METRICS = [
     'dribbles_unsuccessful_p90', 'bad_ball_control_p90', 'offsides_p90',
     'yellow_cards_p90', 'red_cards_p90', 'mistakes_goals_p90', 'mistakes_chances_p90',
     'fouls_p90', 'actions_unsuccessful_p90',
-    # добавляем для матчей
+    # добавляем для матчей (абсолютные значения)
     'lost_balls', 'lost_balls_own_half', 'individual_ball_losses',
     'lost_balls_after_passes', 'challenges_unsuccessful',
     'dribbles_unsuccessful', 'bad_ball_control', 'offsides',
@@ -234,7 +234,7 @@ def check_db_connection():
 
 check_db_connection()
 
-# -------------------- ФУНКЦИИ АНАЛИЗА (общие) --------------------
+# -------------------- ФУНКЦИИ АНАЛИЗА (сезон) --------------------
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -269,7 +269,168 @@ def minmax_normalize(series):
         return pd.Series(0.5, index=s.index)
     return (s - min_val) / (max_val - min_val)
 
-# -------------------- МАТЧЕВАЯ СТАТИСТИКА (без нормализации на 90 минут) --------------------
+@st.cache_data
+def calculate_ratings(df, position_weights, league_col='league'):
+    if league_col in df.columns:
+        result_dfs = []
+        for _, group_df in df.groupby(league_col):
+            rated = _calculate_ratings_for_group(group_df, position_weights)
+            result_dfs.append(rated)
+        return pd.concat(result_dfs, ignore_index=True)
+    else:
+        return _calculate_ratings_for_group(df, position_weights)
+
+def _calculate_ratings_for_group(df, position_weights):
+    all_used = set()
+    for pos_weights in position_weights.values():
+        for m, w in pos_weights.items():
+            if w != 0:
+                all_used.add(m)
+    valid_metrics = [m for m in all_used if m in df.columns]
+    if not valid_metrics:
+        df['rating'] = 50.0
+        return df
+    norm_cols = {}
+    for m in valid_metrics:
+        df[f'{m}_norm'] = minmax_normalize(df[m])
+        norm_cols[m] = f'{m}_norm'
+
+    def calc_row(row):
+        pos = get_position_group(row.get('position', ''))
+        weights = position_weights.get(pos, {})
+        if not weights:
+            return 50.0
+        pos_sum = 0.0; pos_weight_sum = 0.0
+        neg_sum = 0.0; neg_weight_sum = 0.0
+        for m, w in weights.items():
+            if w == 0 or m not in valid_metrics:
+                continue
+            col = norm_cols.get(m)
+            if col and pd.notna(row[col]):
+                if m in NEGATIVE_METRICS:
+                    neg_sum += (1.0 - row[col]) * abs(w)
+                    neg_weight_sum += abs(w)
+                else:
+                    pos_sum += row[col] * w
+                    pos_weight_sum += w
+        pos_score = pos_sum / pos_weight_sum if pos_weight_sum > 0 else 0.5
+        neg_score = neg_sum / neg_weight_sum if neg_weight_sum > 0 else 0.5
+        return 100 * (pos_score + neg_score) / 2
+
+    df['rating'] = df.apply(calc_row, axis=1).round(1)
+    return df
+
+def format_metric_with_detail(metric, value, player_row):
+    if metric.endswith('_pct') or metric == 'pass_accuracy':
+        base_col = None
+        if metric == 'pass_accuracy': base_col = 'passes'
+        elif metric == 'dribbles_success_pct': base_col = 'dribbles'
+        elif metric == 'tackles_success_pct': base_col = 'tackles'
+        elif metric == 'challenges_won_pct': base_col = 'challenges'
+        elif metric == 'air_challenges_won_pct': base_col = 'air_challenges'
+        elif metric == 'crosses_accuracy': base_col = 'crosses'
+        elif metric == 'progressive_passes_accuracy': base_col = 'progressive_passes'
+        elif metric == 'passes_final_third_accuracy': base_col = 'passes_final_third'
+        elif metric == 'short_passes_accuracy': base_col = 'short_passes'
+        elif metric == 'long_passes_accuracy': base_col = 'long_passes'
+        elif metric == 'passes_into_penalty_box_accuracy': base_col = 'passes_into_penalty_box'
+        elif metric == 'super_long_passes_accuracy': base_col = 'super_long_passes'
+        elif metric == 'dribbling_final_third_success_pct': base_col = 'dribbling_final_third'
+        elif metric == 'defensive_challenges_won_pct': base_col = 'defensive_challenges'
+        elif metric == 'attacking_challenges_won_pct': base_col = 'attacking_challenges'
+        if base_col and base_col in player_row:
+            total = player_row[base_col]
+            if pd.notna(total) and total > 0:
+                successful = int(round(total * value / 100))
+                return f"{value:.1f}% ({successful}/{int(total)})"
+        return f"{value:.1f}%"
+    else:
+        return f"{value:.2f}"
+
+def build_position_tables(df, position_weights):
+    tables = {}
+    positions = ['FW', 'AM', 'CM', 'FB', 'CB']
+    for pos in positions:
+        pos_df = df[df['position'].map(get_position_group) == pos].copy()
+        if pos_df.empty:
+            tables[pos] = ([], [])
+            continue
+        metrics = [m for m, w in position_weights.get(pos, {}).items() if w != 0 and m in df.columns]
+        if not metrics:
+            tables[pos] = ([], [])
+            continue
+
+        for m in metrics:
+            col = pos_df[m]
+            min_val, max_val = col.min(), col.max()
+            if max_val - min_val == 0:
+                pos_df[f'{m}_norm_pos'] = 0.5
+            else:
+                pos_df[f'{m}_norm_pos'] = (col - min_val) / (max_val - min_val)
+            if m in NEGATIVE_METRICS:
+                pos_df[f'{m}_norm_pos'] = 1.0 - pos_df[f'{m}_norm_pos']
+
+        max_vals = {m: pos_df[f'{m}_norm_pos'].max() for m in metrics}
+        min_vals = {m: pos_df[f'{m}_norm_pos'].min() for m in metrics}
+
+        rows = []
+        for _, player_row in pos_df.iterrows():
+            row_data = [player_row['player'], int(player_row['minutes']), f"{player_row['rating']:.1f}"]
+            for m in metrics:
+                val = player_row[m]
+                formatted = format_metric_with_detail(m, val, player_row)
+                norm_val = player_row[f'{m}_norm_pos']
+                is_max = (norm_val == max_vals[m])
+                is_min = (norm_val == min_vals[m])
+                if is_max and not is_min:
+                    formatted = f"🟢 {formatted}"
+                elif is_min and not is_max:
+                    formatted = f"🔴 {formatted}"
+                row_data.append(formatted)
+            rows.append(row_data)
+
+        headers = ['Игрок', 'Мин', 'Рейтинг'] + [METRIC_NAMES_RU.get(m, m) for m in metrics]
+        tables[pos] = (rows, headers)
+    return tables
+
+def build_main_table(df, selected_metrics):
+    metrics = [m for m in selected_metrics if m in df.columns]
+    if not metrics:
+        return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
+
+    norm_cols = {}
+    for m in metrics:
+        col = df[m]
+        min_val, max_val = col.min(), col.max()
+        if max_val - min_val == 0:
+            norm_cols[m] = pd.Series(0.5, index=df.index)
+        else:
+            norm_cols[m] = (col - min_val) / (max_val - min_val)
+        if m in NEGATIVE_METRICS:
+            norm_cols[m] = 1.0 - norm_cols[m]
+
+    max_vals = {m: norm_cols[m].max() for m in metrics}
+    min_vals = {m: norm_cols[m].min() for m in metrics}
+
+    main_headers = ['№','Игрок','Поз','Мин','Рейтинг'] + [METRIC_NAMES_RU.get(m, m) for m in metrics]
+    main_data = []
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
+        row_data = [i, row['player'], row['position'], int(row['minutes']), f"{row['rating']:.1f}"]
+        for m in metrics:
+            val = row[m]
+            detail = format_metric_with_detail(m, val, row)
+            norm_val = norm_cols[m].loc[row.name]
+            is_max = (norm_val == max_vals[m])
+            is_min = (norm_val == min_vals[m])
+            if is_max and not is_min:
+                detail = f"🟢 {detail}"
+            elif is_min and not is_max:
+                detail = f"🔴 {detail}"
+            row_data.append(detail)
+        main_data.append(row_data)
+    return pd.DataFrame(main_data, columns=main_headers)
+
+# -------------------- МАТЧЕВАЯ СТАТИСТИКА (без p90) --------------------
 MATCH_METRIC_NAMES_RU = {
     'goals': 'Голы', 'assists': 'Голевые передачи',
     'shots': 'Удары', 'shots_on_target': 'Удары в створ',
@@ -429,7 +590,13 @@ for pos in DEFAULT_MATCH_WEIGHTS:
             DEFAULT_MATCH_WEIGHTS[pos][m] = 0.0
 
 def format_match_metric(metric, value, player_row):
-    """Форматирует метрику матча с указанием successful/total, если применимо."""
+    if pd.isna(value):
+        return "-"
+    try:
+        value = float(value)
+    except (ValueError, TypeError):
+        return str(value)
+
     if metric.endswith('_pct') or metric == 'pass_accuracy':
         base_col = None
         if metric == 'pass_accuracy': base_col = 'passes'
@@ -455,7 +622,6 @@ def format_match_metric(metric, value, player_row):
                 return f"{value:.1f}% ({successful}/{int(total)})"
         return f"{value:.1f}%"
     else:
-        # Для абсолютных метрик ищем, есть ли соответствующий процентный или успешный показатель
         accuracy_col = None
         if metric + '_accuracy' in player_row:
             accuracy_col = metric + '_accuracy'
@@ -467,14 +633,20 @@ def format_match_metric(metric, value, player_row):
                 return f"{int(shots_on_target)}/{int(value)}"
             else:
                 return f"{value:.2f}"
-        elif metric in ['goals', 'assists', 'xG', 'yellow_cards', 'red_cards']:
+        elif metric in ['goals', 'assists', 'xG', 'yellow_cards', 'red_cards',
+                        'mistakes_goals', 'mistakes_chances', 'fouls', 'fouls_suffered']:
             return f"{value:.2f}"
         if accuracy_col:
             acc_val = player_row.get(accuracy_col)
             total = value
             if pd.notna(acc_val) and pd.notna(total) and total > 0:
-                successful = int(round(total * acc_val / 100)) if acc_val <= 100 else int(acc_val)
+                if acc_val <= 100:
+                    successful = int(round(total * acc_val / 100))
+                else:
+                    successful = int(acc_val)
                 return f"{successful}/{int(total)}"
+        if value == int(value):
+            return str(int(value))
         return f"{value:.2f}"
 
 @st.cache_data
@@ -1164,7 +1336,6 @@ def load_match_stats(match_id, team_ids=None):
             if df[col].max() <= 1.0:
                 df[col] = df[col] * 100
 
-    # Для матчей не вычисляем _p90, оставляем абсолютные значения
     return df
 
 # -------------------- ВИЗУАЛИЗАЦИЯ (Plotly) --------------------
@@ -1189,10 +1360,7 @@ def build_radar_labels(metrics, players, avg_series=None):
         lines = [name]
         for p in players:
             val = p[m]
-            if m.endswith('_pct') or m == 'pass_accuracy':
-                detail = format_match_metric(m, val, p)
-            else:
-                detail = format_match_metric(m, val, p)
+            detail = format_match_metric(m, val, p)
             lines.append(f"{p['player']}: {detail}")
         if avg_series is not None and m in avg_series:
             avg_val = avg_series[m]
