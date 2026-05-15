@@ -1634,7 +1634,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
             return 0
 
     def format_value(metric, value, player_row, is_best, is_worst, season_val):
-        # Формируем основную строку (без кружков)
+        main_str = ""
         if metric.endswith('_pct') or metric == 'pass_accuracy':
             base_col = None
             if metric == 'pass_accuracy': base_col = 'passes'
@@ -1755,7 +1755,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                     season_val = season_vals.get(m) if season_vals else None
                     formatted = format_value(m, val, player_row, is_best, is_worst, season_val)
                     row_data[m] = formatted
-                    # Сохраняем числовое значение для сравнения с лигой (для заливки)
                     if league_avg_val is not None:
                         row_data[f'{m}_raw'] = val
                         row_data[f'{m}_avg'] = league_avg_val
@@ -1764,17 +1763,14 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
     if not all_matches_data:
         raise ValueError("Нет данных для экспорта")
 
-    # Группируем по позициям
     pos_groups = defaultdict(list)
     for pos, row in all_matches_data:
         pos_groups[pos].append(row)
 
-    # Создаём Excel-файл
     with pd.ExcelWriter(output_bytes_io, engine='openpyxl') as writer:
         for pos, rows_list in pos_groups.items():
             metrics = [m for m, w in match_weights.get(pos, {}).items() if w != 0]
             headers = ['Игрок', 'Игра', 'Мин'] + [MATCH_METRIC_NAMES_RU.get(m, m) for m in metrics]
-            # Добавляем средние по лиге в заголовки
             if league_avg:
                 for i, m in enumerate(metrics):
                     if m in league_avg:
@@ -1784,40 +1780,30 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                         else:
                             headers[3+i] += f"\n(ср. {avg_val:.2f})"
 
-            # Группируем строки по игрокам
             player_matches = defaultdict(list)
             for row in rows_list:
                 player_matches[row['player']].append(row)
             sorted_players = sorted(player_matches.keys())
 
-            # Создаём новый лист вручную (чтобы применить заливку)
             sheet_name = position_ru_long.get(pos, pos)
-            # Удаляем лист, если он существует (при перезаписи)
             if sheet_name in writer.book.sheetnames:
                 std = writer.book[sheet_name]
                 writer.book.remove(std)
             ws = writer.book.create_sheet(sheet_name)
-            # Записываем заголовки
             for col_idx, header in enumerate(headers, start=1):
                 cell = ws.cell(row=1, column=col_idx, value=header)
                 cell.font = Font(bold=True)
                 cell.alignment = Alignment(horizontal='center')
-            # Записываем данные с заливкой
             row_num = 2
             for player in sorted_players:
                 matches = sorted(player_matches[player], key=lambda x: x['match_label'])
                 for match in matches:
-                    # Игрок
                     ws.cell(row=row_num, column=1, value=match['player'])
-                    # Игра
                     ws.cell(row=row_num, column=2, value=match['match_label'])
-                    # Мин
                     ws.cell(row=row_num, column=3, value=match['minutes'])
-                    # Метрики
                     for col_idx, m in enumerate(metrics, start=4):
                         formatted_value = match.get(m, '')
                         cell = ws.cell(row=row_num, column=col_idx, value=formatted_value)
-                        # Определяем цвет фона на основе сравнения с лигой
                         raw_val = match.get(f'{m}_raw')
                         avg_val = match.get(f'{m}_avg')
                         if raw_val is not None and avg_val is not None:
@@ -1825,13 +1811,11 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                                 raw_f = float(raw_val)
                                 avg_f = float(avg_val)
                                 if m in NEGATIVE_METRICS:
-                                    # Для негативных: ниже среднего = хорошо -> синий, выше = плохо -> коричневый
                                     if raw_f < avg_f:
-                                        cell.fill = PatternFill(start_color="9DC3E6", end_color="9DC3E6", fill_type="solid")  # светлый синий
+                                        cell.fill = PatternFill(start_color="9DC3E6", end_color="9DC3E6", fill_type="solid")
                                     elif raw_f > avg_f:
-                                        cell.fill = PatternFill(start_color="E6B89D", end_color="E6B89D", fill_type="solid")  # светлый коричневый
+                                        cell.fill = PatternFill(start_color="E6B89D", end_color="E6B89D", fill_type="solid")
                                 else:
-                                    # Позитивные: выше среднего = хорошо -> синий
                                     if raw_f > avg_f:
                                         cell.fill = PatternFill(start_color="9DC3E6", end_color="9DC3E6", fill_type="solid")
                                     elif raw_f < avg_f:
@@ -1839,7 +1823,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                             except:
                                 pass
                     row_num += 1
-            # Автоширина колонок
             for col in ws.columns:
                 max_len = 0
                 col_letter = get_column_letter(col[0].column)
