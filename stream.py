@@ -1744,9 +1744,8 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
     for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=4, column=col_idx, value=header)
         cell.font = Font(name='Calibri', size=11, bold=True)
-        cell.alignment = Alignment(horizontal='center', vertical='center', textRotation=255)  # вертикальный текст
-    ws.row_dimensions[4].height = 150  # высота для вертикального текста
-
+        cell.alignment = Alignment(horizontal='center', vertical='center', textRotation=255, wrap_text=True)
+    
     # Ширина колонок (подобрана для вертикальных заголовков)
     col_widths = [8, 18, 15, 5, 8, 12, 8, 5, 6, 10, 10, 12, 12, 10, 10, 8, 12, 12, 10, 10, 8, 8, 12, 12, 12, 12]
     for i, w in enumerate(col_widths, start=1):
