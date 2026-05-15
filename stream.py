@@ -1606,12 +1606,10 @@ def get_average_series(radar_metrics, full_df):
 # -------------------- ЭКСПОРТ В ФОРМАТЕ RuStat (РАСШИРЕННЫЙ) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
     """
-    Экспорт матчевой статистики в формате RuStat (точное копирование стиля).
-    - Имя игрока только в первой строке группы.
-    - Фиксированная ширина колонок, шрифт Calibri 11, закрепление заголовков.
+    Экспорт матчевой статистики в формате RuStat с вертикальными заголовками.
     """
     from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment, Border, Side
+    from openpyxl.styles import Font, Alignment
     from openpyxl.utils import get_column_letter
     from collections import defaultdict
 
@@ -1638,7 +1636,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         return f"{t}/{succ}"
 
     # Сбор данных
-    all_rows = []  # каждый элемент: (pos, match_label, player_name, minutes, dict с данными метрик, best/worst, raw значения)
+    all_rows = []
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
         if not data:
@@ -1650,14 +1648,13 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
 
         df['pos_group'] = df['position'].apply(get_position_group)
 
-        # Вычисляем best/worst для каждой позиции в этом матче
+        # Лучшие/худшие в команде по каждой позиции
         best_worst = {}
         for pos in position_order:
             pos_df = df[df['pos_group'] == pos]
             if pos_df.empty:
                 continue
             best_worst[pos] = {}
-            # Метрики, для которых нужно определить лучшего/худшего
             metrics_to_check = ['actions', 'actions_opp_box', 'shots', 'passes', 'progressive_passes',
                                 'passes_final_third', 'passes_into_penalty_box', 'crosses', 'challenges',
                                 'defensive_challenges', 'attacking_challenges', 'air_challenges', 'tackles', 'dribbles']
@@ -1677,7 +1674,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 minutes = safe_int(player_row.get('minutes', 0))
                 season_vals = player_season_map.get(player_name, {}) if player_season_map else {}
 
-                # Лучший/худший
                 is_best = {}
                 is_worst = {}
                 for m in best_worst.get(pos, {}):
@@ -1742,17 +1738,17 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
     if not all_rows:
         raise ValueError("Нет данных для экспорта")
 
-    # Группировка по позициям, затем по игрокам, затем по матчам
+    # Группировка по позициям и игрокам
     pos_groups = defaultdict(list)
     for row in all_rows:
         pos_groups[row['pos']].append(row)
 
-    # Создаём Workbook
+    # Создание книги
     wb = Workbook()
     ws = wb.active
     ws.title = 'Лист1'
 
-    # Шрифт Calibri 11 для всех ячеек
+    # Шрифт по умолчанию
     default_font = Font(name='Calibri', size=11)
     for row in ws.iter_rows():
         for cell in row:
@@ -1766,7 +1762,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         ws[cell].font = Font(name='Calibri', size=11, bold=True)
         ws[cell].alignment = Alignment(horizontal='center')
 
-    # Заголовки колонок (4 строка)
+    # Заголовки
     headers = [
         'Амплуа', 'Игрок', 'Игра', 'Мин',
         'ТТД/уд', 'ТТД у чужих ворот/уд', 'Удары/в створ',
@@ -1781,10 +1777,12 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
     for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=4, column=col_idx, value=header)
         cell.font = Font(name='Calibri', size=11, bold=True)
-        cell.alignment = Alignment(horizontal='center')
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        # Поворот текста на 90 градусов для колонок, начиная с 5-й
+        if col_idx >= 5:
+            cell.alignment = Alignment(horizontal='center', vertical='center', text_rotation=90)
 
-    # Закрепление первой строки и первой колонки
-    ws.freeze_panes = 'B5'  # закрепляем строку 4 и столбец A
+    ws.freeze_panes = 'B5'  # закрепление строки 4 и столбца A
 
     # Заполнение данных
     row_idx = 5
@@ -1792,7 +1790,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         rows_list = pos_groups.get(pos, [])
         if not rows_list:
             continue
-        # Группируем по игрокам
         player_matches = defaultdict(list)
         for r in rows_list:
             player_matches[r['player']].append(r)
@@ -1800,10 +1797,9 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
             matches = sorted(player_matches[player], key=lambda x: x['match'])
             first_match = True
             for match in matches:
-                # Амплуа (только для первой строки игрока, но в образце у каждой строки есть амплуа)
-                # В образце у всех строк амплуа заполнено, оставляем везде
+                # Амплуа
                 ws.cell(row=row_idx, column=1, value=position_ru.get(pos, pos))
-                # Игрок (только для первой строки группы)
+                # Игрок (только в первой строке)
                 if first_match:
                     ws.cell(row=row_idx, column=2, value=player)
                 else:
@@ -1813,32 +1809,27 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 # Мин
                 ws.cell(row=row_idx, column=4, value=match['minutes'])
 
-                # Функция для форматирования значения с маркерами
                 def format_cell(value, raw_val, avg_val, metric_name, is_best_flag, is_worst_flag, season_val):
-                    # Базовое значение
-                    base_str = str(value) if value else ''
-                    # Маркеры лучший/худший
+                    base = str(value) if value else ''
                     if is_best_flag:
-                        base_str = f"🟢 {base_str}"
+                        base = f"🟢 {base}"
                     elif is_worst_flag:
-                        base_str = f"🔴 {base_str}"
-                    # Маркер сезона
+                        base = f"🔴 {base}"
                     if season_val is not None and not pd.isna(season_val):
                         try:
                             s_val = float(season_val)
                             if metric_name in NEGATIVE_METRICS:
                                 if raw_val < s_val:
-                                    base_str += " ↑"
+                                    base += " ↑"
                                 elif raw_val > s_val:
-                                    base_str += " ↓"
+                                    base += " ↓"
                             else:
                                 if raw_val > s_val:
-                                    base_str += " ↑"
+                                    base += " ↑"
                                 elif raw_val < s_val:
-                                    base_str += " ↓"
+                                    base += " ↓"
                         except:
                             pass
-                    # Маркер лиги
                     marker = ''
                     color = None
                     if raw_val is not None and avg_val is not None:
@@ -1857,101 +1848,67 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                                     marker, color = "▼ ", "8B4513"
                         except:
                             pass
-                    final_str = marker + base_str if marker else base_str
-                    return final_str, color
+                    return (marker + base if marker else base), color
 
                 # ТТД/уд
                 ttd_val = f"{match['ttd_total']}/{match['ttd_succ']}" if match['ttd_total'] > 0 else ''
-                final, color = format_cell(ttd_val, match['ttd_raw'], league_avg.get('actions') if league_avg else None,
-                                           'actions', match['is_best'].get('actions', False), match['is_worst'].get('actions', False),
-                                           match['season_vals'].get('actions') if 'actions' in match['season_vals'] else None)
+                final, col = format_cell(ttd_val, match['ttd_raw'], league_avg.get('actions') if league_avg else None,
+                                         'actions', match['is_best'].get('actions', False), match['is_worst'].get('actions', False),
+                                         match['season_vals'].get('actions') if 'actions' in match['season_vals'] else None)
                 cell = ws.cell(row=row_idx, column=5, value=final)
-                if color:
-                    cell.font = Font(color=color, name='Calibri', size=11)
+                if col:
+                    cell.font = Font(color=col)
 
-                # ТТД у чужих ворот/уд
+                # ТТД у чужих ворот
                 ttd_opp_val = f"{match['ttd_opp_total']}/{match['ttd_opp_succ']}" if match['ttd_opp_total'] > 0 else ''
-                final, color = format_cell(ttd_opp_val, match['ttd_opp_raw'], league_avg.get('actions_opp_box') if league_avg else None,
-                                           'actions_opp_box', match['is_best'].get('actions_opp_box', False), match['is_worst'].get('actions_opp_box', False),
-                                           match['season_vals'].get('actions_opp_box') if 'actions_opp_box' in match['season_vals'] else None)
+                final, col = format_cell(ttd_opp_val, match['ttd_opp_raw'], league_avg.get('actions_opp_box') if league_avg else None,
+                                         'actions_opp_box', match['is_best'].get('actions_opp_box', False), match['is_worst'].get('actions_opp_box', False),
+                                         match['season_vals'].get('actions_opp_box') if 'actions_opp_box' in match['season_vals'] else None)
                 cell = ws.cell(row=row_idx, column=6, value=final)
-                if color:
-                    cell.font = Font(color=color, name='Calibri', size=11)
+                if col:
+                    cell.font = Font(color=col)
 
-                # Удары/в створ
+                # Удары
                 shots_val = f"{match['shots_target']}/{match['shots_total']}" if match['shots_total'] > 0 else ''
                 ws.cell(row=row_idx, column=7, value=shots_val)
-                # Фолы, фолы на игроке
                 ws.cell(row=row_idx, column=8, value=match['fouls'] if match['fouls'] > 0 else '')
                 ws.cell(row=row_idx, column=9, value=match['fouls_suffered'] if match['fouls_suffered'] > 0 else '')
-                # Передачи/точные
-                passes_val = frac(match['passes_total'], match['passes_acc'])
-                ws.cell(row=row_idx, column=10, value=passes_val)
-                # Передачи вперёд
-                prog_val = frac(match['prog_total'], match['prog_acc'])
-                ws.cell(row=row_idx, column=11, value=prog_val)
-                # Передачи в финальную треть
-                ft_val = frac(match['ft_total'], match['ft_acc'])
-                ws.cell(row=row_idx, column=12, value=ft_val)
-                # Передачи в финальной трети (дубль)
-                ws.cell(row=row_idx, column=13, value=ft_val)
-                # Передачи в штрафную
-                pen_val = frac(match['pen_total'], match['pen_acc'])
-                ws.cell(row=row_idx, column=14, value=pen_val)
-                # Ключевые передачи
+                ws.cell(row=row_idx, column=10, value=frac(match['passes_total'], match['passes_acc']))
+                ws.cell(row=row_idx, column=11, value=frac(match['prog_total'], match['prog_acc']))
+                ws.cell(row=row_idx, column=12, value=frac(match['ft_total'], match['ft_acc']))
+                ws.cell(row=row_idx, column=13, value=frac(match['ft_total'], match['ft_acc']))  # дубль
+                ws.cell(row=row_idx, column=14, value=frac(match['pen_total'], match['pen_acc']))
                 ws.cell(row=row_idx, column=15, value=match['key_passes'] if match['key_passes'] > 0 else '')
-                # Навесы
-                cross_val = frac(match['crosses_total'], match['crosses_acc'])
-                ws.cell(row=row_idx, column=16, value=cross_val)
-                # Единоборства
-                chall_val = frac(match['chall_total'], match['chall_acc'])
-                ws.cell(row=row_idx, column=17, value=chall_val)
-                # В обороне
-                def_val = frac(match['def_total'], match['def_acc'])
-                ws.cell(row=row_idx, column=18, value=def_val)
-                # В атаке
-                att_val = frac(match['att_total'], match['att_acc'])
-                ws.cell(row=row_idx, column=19, value=att_val)
-                # Вверху
-                air_val = frac(match['air_total'], match['air_acc'])
-                ws.cell(row=row_idx, column=20, value=air_val)
-                # Отборы
-                tack_val = frac(match['tack_total'], match['tack_acc'])
-                ws.cell(row=row_idx, column=21, value=tack_val)
-                # Обводки
-                drib_val = frac(match['drib_total'], match['drib_acc'])
-                ws.cell(row=row_idx, column=22, value=drib_val)
-                # Перехваты/на чужой половине
-                inter_val = f"{match['interceptions']}/{match['interceptions_opp']}" if match['interceptions'] > 0 else ''
-                ws.cell(row=row_idx, column=23, value=inter_val)
-                # Подборы/на чужой половине
-                loose_val = f"{match['loose']}/{match['loose_opp']}" if match['loose'] > 0 else ''
-                ws.cell(row=row_idx, column=24, value=loose_val)
-                # Потери/на своей половине
-                lost_val = f"{match['lost_total']}/{match['lost_own']}" if match['lost_total'] > 0 else ''
-                ws.cell(row=row_idx, column=25, value=lost_val)
-                # Возвраты/на чужой половине
-                rec_val = f"{match['rec_total']}/{match['rec_opp']}" if match['rec_total'] > 0 else ''
-                ws.cell(row=row_idx, column=26, value=rec_val)
+                ws.cell(row=row_idx, column=16, value=frac(match['crosses_total'], match['crosses_acc']))
+                ws.cell(row=row_idx, column=17, value=frac(match['chall_total'], match['chall_acc']))
+                ws.cell(row=row_idx, column=18, value=frac(match['def_total'], match['def_acc']))
+                ws.cell(row=row_idx, column=19, value=frac(match['att_total'], match['att_acc']))
+                ws.cell(row=row_idx, column=20, value=frac(match['air_total'], match['air_acc']))
+                ws.cell(row=row_idx, column=21, value=frac(match['tack_total'], match['tack_acc']))
+                ws.cell(row=row_idx, column=22, value=frac(match['drib_total'], match['drib_acc']))
+                ws.cell(row=row_idx, column=23, value=f"{match['interceptions']}/{match['interceptions_opp']}" if match['interceptions'] > 0 else '')
+                ws.cell(row=row_idx, column=24, value=f"{match['loose']}/{match['loose_opp']}" if match['loose'] > 0 else '')
+                ws.cell(row=row_idx, column=25, value=f"{match['lost_total']}/{match['lost_own']}" if match['lost_total'] > 0 else '')
+                ws.cell(row=row_idx, column=26, value=f"{match['rec_total']}/{match['rec_opp']}" if match['rec_total'] > 0 else '')
 
                 row_idx += 1
                 first_match = False
 
-    # Установка ширины колонок (как в образце)
+    # Ширина колонок (как в образце)
     col_widths = [12, 20, 15, 6, 10, 16, 12, 6, 8, 12, 12, 14, 14, 12, 12, 8, 14, 14, 12, 12, 10, 10, 14, 14, 14, 14]
-    for i, width in enumerate(col_widths, start=1):
-        ws.column_dimensions[get_column_letter(i)].width = width
+    for i, w in enumerate(col_widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
 
-    # Выравнивание всех ячеек по центру (кроме колонок с текстом)
+    # Выравнивание для всех ячеек
     for row in ws.iter_rows(min_row=1, max_row=row_idx-1, min_col=1, max_col=26):
         for cell in row:
-            if cell.column in [1, 2, 3]:  # амплуа, игрок, игра
+            if cell.column in [1, 2, 3]:
                 cell.alignment = Alignment(horizontal='left', vertical='center')
             else:
                 cell.alignment = Alignment(horizontal='center', vertical='center')
 
     wb.save(output_bytes_io)
-    st.success("Экспорт завершён в точном соответствии с образцом")
+    st.success("Экспорт завершён (вертикальные заголовки)")
 
 # -------------------- ИНТЕРФЕЙС --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
