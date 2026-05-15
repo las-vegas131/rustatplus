@@ -1609,6 +1609,8 @@ if 'position_tables' not in st.session_state:
     st.session_state.position_tables = {}
 if 'current_settings' not in st.session_state:
     st.session_state.current_settings = load_settings()
+if 'match_settings' not in st.session_state:
+    st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
 if 'selected_main_metrics' not in st.session_state:
     st.session_state.selected_main_metrics = []
 if 'avg_source' not in st.session_state:
@@ -1739,7 +1741,6 @@ with st.sidebar:
                 teams_in_league = get_teams_for_league(match_league_analysis)
                 team_choice = st.radio("Команда", ["Обе", "Хозяева", "Гости"], key="match_team_choice")
 
-                # Сравнение с лигой
                 st.subheader("📊 Сравнение с лигой")
                 comp_league = st.selectbox("Лига для сравнения", all_leagues, index=all_leagues.index(match_league_analysis) if match_league_analysis in all_leagues else 0, key="comp_league")
                 seasons_for_comp = get_seasons_for_leagues([comp_league])
@@ -1781,7 +1782,7 @@ with st.sidebar:
                             df_match = load_match_stats(match_id, team_ids)
                             if not df_match.empty:
                                 df_match['league'] = 'match'
-                                df_match = calculate_match_ratings(df_match, DEFAULT_MATCH_WEIGHTS)
+                                df_match = calculate_match_ratings(df_match, st.session_state.match_settings)
                                 df_match = df_match.sort_values('rating', ascending=False).reset_index(drop=True)
                                 new_matches[match_id] = {
                                     'df': df_match,
@@ -1798,7 +1799,7 @@ with st.sidebar:
                             st.session_state.match_tables = {}
                             for mid, data in new_matches.items():
                                 df = data['df']
-                                pos_tables = build_match_position_tables(df, DEFAULT_MATCH_WEIGHTS,
+                                pos_tables = build_match_position_tables(df, st.session_state.match_settings,
                                                                           league_avg=league_avg,
                                                                           player_season_map=player_season_map)
                                 st.session_state.match_tables[mid] = pos_tables
@@ -1810,10 +1811,13 @@ with st.sidebar:
 
     # Настройки весов
     st.header("⚙️ Веса")
-    if st.button("Редактор весов", use_container_width=True):
+    if st.button("Редактор весов (сезон)", use_container_width=True):
         st.session_state.show_weights_editor = True
-    if st.button("Сбросить веса", use_container_width=True):
+    if st.button("Редактор весов (матч)", use_container_width=True):
+        st.session_state.show_match_weights_editor = True
+    if st.button("Сбросить все веса", use_container_width=True):
         st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
+        st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
         save_settings(st.session_state.current_settings)
         st.cache_data.clear()
         st.success("Веса сброшены")
@@ -1821,7 +1825,7 @@ with st.sidebar:
             st.session_state.df_db = calculate_ratings(st.session_state.df_db, st.session_state.current_settings)
             st.session_state.position_tables = build_position_tables(st.session_state.df_db, st.session_state.current_settings)
         for mid, data in st.session_state.df_matches.items():
-            data['df'] = calculate_match_ratings(data['df'], DEFAULT_MATCH_WEIGHTS)
+            data['df'] = calculate_match_ratings(data['df'], st.session_state.match_settings)
 
     st.header("📊 Средние")
     avg_source = st.radio("Источник", ["Текущие данные", "Лига из БД"], key="avg_source")
@@ -1963,7 +1967,7 @@ with tab_match:
             if 'match_tables' in st.session_state and active_match_id in st.session_state.match_tables:
                 position_tables_active = st.session_state.match_tables[active_match_id]
             else:
-                position_tables_active = build_match_position_tables(df_active, DEFAULT_MATCH_WEIGHTS)
+                position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings)
 
             all_metrics = [m for m in MATCH_ALL_METRICS if m in df_active.columns]
             metric_names = {m: MATCH_METRIC_NAMES_RU.get(m, m) for m in all_metrics}
@@ -1981,7 +1985,6 @@ with tab_match:
 
             subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
 
-            # Легенда
             st.markdown("""
             <div style="font-size:13px; margin-bottom:8px; line-height:1.6;">
             <b>Обозначения:</b><br>
@@ -2036,9 +2039,9 @@ with tab_match:
     else:
         st.info("Загрузите матчи (в боковой панели)")
 
-# -------------------- РЕДАКТОР ВЕСОВ --------------------
+# -------------------- РЕДАКТОР ВЕСОВ (СЕЗОН) --------------------
 if st.session_state.get('show_weights_editor'):
-    with st.expander("Редактор весов метрик", expanded=True):
+    with st.expander("Редактор весов метрик (сезон)", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
         pos_names = {'FW':'Нападающие','AM':'Атак. полузащитники','CM':'Центр. полузащитники','FB':'Крайние защитники','CB':'Центр. защитники'}
         active_df = st.session_state.df_db if st.session_state.df_db is not None else (
@@ -2083,10 +2086,67 @@ if st.session_state.get('show_weights_editor'):
                 if st.session_state.df_db is not None:
                     st.session_state.df_db = calculate_ratings(st.session_state.df_db, new_weights)
                     st.session_state.position_tables = build_position_tables(st.session_state.df_db, new_weights)
-                for mid, data in st.session_state.df_matches.items():
-                    data['df'] = calculate_match_ratings(data['df'], DEFAULT_MATCH_WEIGHTS)
                 st.rerun()
         with col2:
             if st.button("Отмена", use_container_width=True, key="cancel_weights"):
                 st.session_state.show_weights_editor = False
+                st.rerun()
+
+# -------------------- РЕДАКТОР ВЕСОВ (МАТЧ) --------------------
+if st.session_state.get('show_match_weights_editor'):
+    with st.expander("Редактор весов метрик (матч)", expanded=True):
+        positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
+        pos_names = {'FW':'Нападающие','AM':'Атак. полузащитники','CM':'Центр. полузащитники','FB':'Крайние защитники','CB':'Центр. защитники'}
+        active_df = st.session_state.df_db if st.session_state.df_db is not None else (
+            list(st.session_state.df_matches.values())[0]['df'] if st.session_state.df_matches else None
+        )
+        if active_df is not None:
+            available_metrics = [m for m in MATCH_ALL_METRICS if m in active_df.columns]
+        else:
+            available_metrics = MATCH_ALL_METRICS
+        weight_tabs = st.tabs([pos_names[p] for p in positions_order])
+        new_weights = {}
+        for idx, pos in enumerate(positions_order):
+            with weight_tabs[idx]:
+                st.caption(f"**{pos_names[pos]}** — снимите галочку, чтобы исключить")
+                current_pos_weights = st.session_state.match_settings.get(pos, {})
+                for metric in available_metrics:
+                    name = MATCH_METRIC_NAMES_RU.get(metric, metric)
+                    enabled = metric in current_pos_weights and current_pos_weights[metric] != 0
+                    displayed_weight = abs(current_pos_weights.get(metric, 1.0)) if enabled else 1.0
+                    col1, col2 = st.columns([2, 1])
+                    with col1:
+                        checked = st.checkbox(f"**{name}**", value=enabled, key=f"chk_match_{pos}_{metric}")
+                    with col2:
+                        weight_val = st.number_input("Вес", min_value=0.1, max_value=10.0, value=displayed_weight, step=0.5, disabled=not checked, key=f"wgt_match_{pos}_{metric}")
+                    if checked and weight_val > 0:
+                        if metric in NEGATIVE_METRICS:
+                            new_weights.setdefault(pos, {})[metric] = -weight_val
+                        else:
+                            new_weights.setdefault(pos, {})[metric] = weight_val
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Сохранить веса матча", use_container_width=True, key="save_match_weights"):
+                for pos in positions_order:
+                    if pos not in new_weights or not new_weights[pos]:
+                        st.error(f"Для позиции **{pos_names[pos]}** должна быть включена хотя бы одна метрика.")
+                        st.stop()
+                st.session_state.match_settings = new_weights
+                st.session_state.show_match_weights_editor = False
+                st.cache_data.clear()
+                st.success("Веса матча обновлены. Данные пересчитываются...")
+                if st.session_state.df_matches:
+                    for mid, data in st.session_state.df_matches.items():
+                        data['df'] = calculate_match_ratings(data['df'], new_weights)
+                        # Обновим таблицы позиций, если они были построены с league_avg
+                        if 'match_tables' in st.session_state and mid in st.session_state.match_tables:
+                            st.session_state.match_tables[mid] = build_match_position_tables(
+                                data['df'], new_weights,
+                                league_avg=st.session_state.get('league_avg'),
+                                player_season_map=st.session_state.get('player_season_map')
+                            )
+                st.rerun()
+        with col2:
+            if st.button("Отмена", use_container_width=True, key="cancel_match_weights"):
+                st.session_state.show_match_weights_editor = False
                 st.rerun()
