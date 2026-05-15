@@ -986,19 +986,22 @@ def load_from_db(league_names, seasons, teams=None):
 
 def get_league_averages(league_name, season):
     df = load_from_db([league_name], [season])
+    df = df[df['minutes'] >= MIN_MINUTES]
     if df.empty:
         return {}
     avg = {}
     for m in MATCH_ALL_METRICS:
-        if m in df.columns:
-            avg[m] = df[m].mean()
+        p90_col = f'{m}_p90'
+        if p90_col in df.columns:
+            avg[m] = df[p90_col].mean()
     return avg
 
 def get_player_season_stats_df(league_name, season):
     df = load_from_db([league_name], [season])
     if df.empty:
         return pd.DataFrame()
-    cols = ['player'] + [m for m in MATCH_ALL_METRICS if m in df.columns]
+    # Берём p90 версии для сравнения с матчем
+    cols = ['player'] + [f'{m}_p90' for m in MATCH_ALL_METRICS if f'{m}_p90' in df.columns]
     return df[cols]
 
 # -------------------- ИМПОРТ --------------------
@@ -1794,8 +1797,14 @@ with st.sidebar:
                             player_season_df = get_player_season_stats_df(comp_league, comp_season)
                             player_season_map = {}
                             if not player_season_df.empty:
+                                # Переименовываем колонки, чтобы убрать _p90 для сопоставления имён метрик
                                 for _, row in player_season_df.iterrows():
-                                    player_season_map[row['player']] = row.to_dict()
+                                    player_dict = {}
+                                    for m in MATCH_ALL_METRICS:
+                                        p90_col = f'{m}_p90'
+                                        if p90_col in row:
+                                            player_dict[m] = row[p90_col]
+                                    player_season_map[row['player']] = player_dict
                             st.session_state.match_tables = {}
                             for mid, data in new_matches.items():
                                 df = data['df']
@@ -1851,11 +1860,10 @@ with tab_season:
         metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in all_metrics}
         with st.expander("Настройка колонок общей таблицы"):
             selected_metrics = st.multiselect(
-                "Выберите до 5 метрик для отображения",
+                "Выберите метрики для отображения",
                 options=all_metrics,
                 format_func=lambda m: metric_names[m],
                 default=st.session_state.selected_main_metrics if st.session_state.selected_main_metrics else all_metrics[:3],
-                max_selections=5,
                 key="main_metrics_selector"
             )
         st.session_state.selected_main_metrics = selected_metrics
@@ -1973,11 +1981,10 @@ with tab_match:
             metric_names = {m: MATCH_METRIC_NAMES_RU.get(m, m) for m in all_metrics}
             with st.expander("Настройка колонок общей таблицы"):
                 selected_metrics = st.multiselect(
-                    "Выберите до 5 метрик для отображения",
+                    "Выберите метрики для отображения",
                     options=all_metrics,
                     format_func=lambda m: metric_names[m],
                     default=all_metrics[:3],
-                    max_selections=5,
                     key="match_main_metrics_selector"
                 )
             if not selected_metrics:
@@ -2138,7 +2145,6 @@ if st.session_state.get('show_match_weights_editor'):
                 if st.session_state.df_matches:
                     for mid, data in st.session_state.df_matches.items():
                         data['df'] = calculate_match_ratings(data['df'], new_weights)
-                        # Обновим таблицы позиций, если они были построены с league_avg
                         if 'match_tables' in st.session_state and mid in st.session_state.match_tables:
                             st.session_state.match_tables[mid] = build_match_position_tables(
                                 data['df'], new_weights,
