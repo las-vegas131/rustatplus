@@ -1000,7 +1000,6 @@ def get_player_season_stats_df(league_name, season):
     df = load_from_db([league_name], [season])
     if df.empty:
         return pd.DataFrame()
-    # Берём p90 версии для сравнения с матчем
     cols = ['player'] + [f'{m}_p90' for m in MATCH_ALL_METRICS if f'{m}_p90' in df.columns]
     return df[cols]
 
@@ -1600,6 +1599,199 @@ def get_average_series(radar_metrics, full_df):
                     return df_league[radar_metrics].mean()
     return None
 
+# -------------------- ЭКСПОРТ В ФОРМАТЕ RuStat --------------------
+def export_matches_to_rustat(matches_dict, selected_match_ids, team_name, season_year, output_bytes_io):
+    """
+    Экспортирует выбранные матчи в Excel в формате RuStat.
+    matches_dict: dict {match_id: {'df': DataFrame, 'label': str}}
+    selected_match_ids: list
+    team_name: str
+    season_year: str
+    output_bytes_io: BytesIO
+    """
+    # Маппинг позиций на русские сокращения
+    position_ru = {
+        'FW': 'НАП', 'AM': 'ВОП', 'CM': 'НОП', 'FB': 'КЗ', 'CB': 'ЦЗ',
+        'GK': 'ВР', 'CF': 'НАП', 'ST': 'НАП', 'CDM': 'НОП', 'CAM': 'ВОП'
+    }
+
+    # Заголовки колонок в нужном порядке (как в образце)
+    ru_columns = [
+        'Амплуа', 'Игрок', 'Игра', 'Мин',
+        'ТТД/уд', 'ТТД у чужих ворот/уд', 'Удары/в створ',
+        'Фолы', 'Фолы на игроке',
+        'Передачи/точные', 'Передачи вперёд', 'Передачи в финальную треть',
+        'Передачи в финальной трети', 'Передачи в штрафную', 'Передачи ключевые',
+        'Навесы', 'Единоборства/удачные', 'В обороне/удачные', 'В атаке/удачные',
+        'Вверху/удачные', 'Отборы/удачные', 'Обводки/удачные',
+        'Перехваты/на чужой половине', 'Подборы/на чужой половине',
+        'Потери/на своей половине', 'Возвраты/на чужо половине'
+    ]
+
+    def safe_int(val):
+        if pd.isna(val) or val is None:
+            return 0
+        try:
+            return int(float(val))
+        except:
+            return 0
+
+    def frac(total, accuracy_pct):
+        t = safe_int(total)
+        if t == 0:
+            return ''
+        acc = safe_int(accuracy_pct) if not pd.isna(accuracy_pct) else 0
+        succ = int(round(t * acc / 100))
+        return f"{t}/{succ}"
+
+    rows = []
+    for match_id in selected_match_ids:
+        data = matches_dict.get(match_id)
+        if not data:
+            continue
+        df = data['df']
+        opponent_label = data.get('label', '')
+        if df.empty:
+            continue
+
+        for _, player in df.iterrows():
+            pos_code = get_position_group(player.get('position', ''))
+            pos_ru = position_ru.get(pos_code, player.get('position', ''))
+
+            minutes = safe_int(player.get('minutes', 0))
+            fouls = safe_int(player.get('fouls', 0))
+            fouls_suffered = safe_int(player.get('fouls_suffered', 0))
+            key_passes = safe_int(player.get('key_passes', 0))
+            interceptions = safe_int(player.get('interceptions', 0))
+
+            # ТТД/уд
+            actions_total = safe_int(player.get('actions', 0))
+            actions_success = safe_int(player.get('actions_successful', 0))
+            ttd = f"{actions_total}/{actions_success}" if actions_total > 0 else ''
+
+            # ТТД у чужих ворот/уд
+            opp_box_total = safe_int(player.get('actions_opp_box', 0))
+            opp_box_success = safe_int(player.get('actions_opp_box_success', 0))
+            ttd_opp = f"{opp_box_total}/{opp_box_success}" if opp_box_total > 0 else ''
+
+            # Удары/в створ
+            shots_total = safe_int(player.get('shots', 0))
+            shots_target = safe_int(player.get('shots_on_target', 0))
+            shots_str = f"{shots_total}/{shots_target}" if shots_total > 0 else ''
+
+            # Передачи/точные
+            passes_total = safe_int(player.get('passes', 0))
+            passes_acc = player.get('pass_accuracy', 0)
+            passes_str = frac(passes_total, passes_acc)
+
+            # Передачи вперёд (прогрессивные)
+            prog_total = safe_int(player.get('progressive_passes', 0))
+            prog_acc = player.get('progressive_passes_accuracy', 0)
+            prog_str = frac(prog_total, prog_acc)
+
+            # Передачи в финальную треть
+            final3_total = safe_int(player.get('passes_final_third', 0))
+            final3_acc = player.get('passes_final_third_accuracy', 0)
+            final3_str = frac(final3_total, final3_acc)
+
+            # Передачи в финальной трети (дублируем)
+            final3_str2 = final3_str
+
+            # Передачи в штрафную
+            penalty_total = safe_int(player.get('passes_into_penalty_box', 0))
+            penalty_acc = player.get('passes_into_penalty_box_accuracy', 0)
+            penalty_str = frac(penalty_total, penalty_acc)
+
+            # Навесы
+            crosses_total = safe_int(player.get('crosses', 0))
+            crosses_acc = player.get('crosses_accuracy', 0)
+            crosses_str = frac(crosses_total, crosses_acc)
+
+            # Единоборства
+            chall_total = safe_int(player.get('challenges', 0))
+            chall_acc = player.get('challenges_won_pct', 0)
+            chall_str = frac(chall_total, chall_acc)
+
+            # В обороне
+            def_total = safe_int(player.get('defensive_challenges', 0))
+            def_acc = player.get('defensive_challenges_won_pct', 0)
+            def_str = frac(def_total, def_acc)
+
+            # В атаке
+            att_total = safe_int(player.get('attacking_challenges', 0))
+            att_acc = player.get('attacking_challenges_won_pct', 0)
+            att_str = frac(att_total, att_acc)
+
+            # Вверху
+            air_total = safe_int(player.get('air_challenges', 0))
+            air_acc = player.get('air_challenges_won_pct', 0)
+            air_str = frac(air_total, air_acc)
+
+            # Отборы
+            tackles_total = safe_int(player.get('tackles', 0))
+            tackles_acc = player.get('tackles_success_pct', 0)
+            tackles_str = frac(tackles_total, tackles_acc)
+
+            # Обводки
+            drib_total = safe_int(player.get('dribbles', 0))
+            drib_acc = player.get('dribbles_success_pct', 0)
+            drib_str = frac(drib_total, drib_acc)
+
+            # Перехваты (нет отдельного на чужой половине, дублируем)
+            interceptions_str = f"{interceptions}/{interceptions}" if interceptions > 0 else ''
+
+            # Подборы/на чужой половине
+            loose_total = safe_int(player.get('loose_ball_recoveries', 0))
+            recover_opp = safe_int(player.get('ball_recoveries_opp_half', 0))
+            loose_str = f"{loose_total}/{recover_opp}" if loose_total > 0 else ''
+
+            # Потери/на своей половине
+            lost_total = safe_int(player.get('lost_balls', 0))
+            lost_own = safe_int(player.get('lost_balls_own_half', 0))
+            lost_str = f"{lost_total}/{lost_own}" if lost_total > 0 else ''
+
+            # Возвраты/на чужой половине
+            rec_total = safe_int(player.get('ball_recoveries', 0))
+            rec_opp = safe_int(player.get('ball_recoveries_opp_half', 0))
+            rec_str = f"{rec_total}/{rec_opp}" if rec_total > 0 else ''
+
+            row = [
+                pos_ru,
+                player.get('player', ''),
+                opponent_label,
+                minutes,
+                ttd, ttd_opp, shots_str,
+                fouls, fouls_suffered,
+                passes_str, prog_str, final3_str, final3_str2, penalty_str, key_passes,
+                crosses_str, chall_str, def_str, att_str, air_str, tackles_str, drib_str,
+                interceptions_str, loose_str, lost_str, rec_str
+            ]
+            rows.append(row)
+
+    if not rows:
+        raise ValueError("Нет данных для экспорта")
+
+    df_export = pd.DataFrame(rows, columns=ru_columns)
+
+    with pd.ExcelWriter(output_bytes_io, engine='openpyxl') as writer:
+        df_export.to_excel(writer, startrow=3, index=False, sheet_name='Лист1')
+        workbook = writer.book
+        worksheet = writer.sheets['Лист1']
+        worksheet['A1'] = f"{team_name} {season_year} RuStat Игроки"
+        worksheet['A2'] = "Показатели"
+        worksheet['A3'] = ""
+        # Простая автоширина
+        for col in worksheet.columns:
+            max_len = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_len:
+                        max_len = len(str(cell.value))
+                except:
+                    pass
+            worksheet.column_dimensions[col_letter].width = min(max_len + 2, 30)
+
 # -------------------- ИНТЕРФЕЙС --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
 st.title("Анализ футболистов InStat")
@@ -1797,7 +1989,6 @@ with st.sidebar:
                             player_season_df = get_player_season_stats_df(comp_league, comp_season)
                             player_season_map = {}
                             if not player_season_df.empty:
-                                # Переименовываем колонки, чтобы убрать _p90 для сопоставления имён метрик
                                 for _, row in player_season_df.iterrows():
                                     player_dict = {}
                                     for m in MATCH_ALL_METRICS:
@@ -2019,6 +2210,51 @@ with tab_match:
                         st.write(f'<div class="match-table">{df_pos.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
                     else:
                         st.info(f"Нет игроков позиции {pos}")
+
+            # --- Экспорт в формате RuStat ---
+            st.markdown("---")
+            st.subheader("📥 Экспорт в формате RuStat")
+            col_sel, col_team, col_season = st.columns([2, 1, 1])
+            with col_sel:
+                export_match_ids = st.multiselect(
+                    "Выберите матчи для экспорта",
+                    options=list(st.session_state.df_matches.keys()),
+                    format_func=lambda mid: st.session_state.df_matches[mid]['label'],
+                    key="rustat_export_matches"
+                )
+            # Определим название команды и сезон из первого выбранного матча
+            team_name_default = "Динамо Минск"
+            season_default = "2025"
+            if export_match_ids:
+                sample_id = export_match_ids[0]
+                sample_df = st.session_state.df_matches[sample_id]['df']
+                if not sample_df.empty and 'team' in sample_df.columns:
+                    team_name_default = sample_df['team'].iloc[0]
+            with col_team:
+                export_team = st.text_input("Название команды", value=team_name_default, key="rustat_team")
+            with col_season:
+                export_season = st.text_input("Сезон (год)", value=season_default, key="rustat_season")
+            if export_match_ids and st.button("📥 Экспорт в Excel (RuStat)", key="export_rustat"):
+                with st.spinner("Формирование RuStat-отчёта..."):
+                    output = io.BytesIO()
+                    try:
+                        export_matches_to_rustat(
+                            st.session_state.df_matches,
+                            export_match_ids,
+                            export_team.strip(),
+                            export_season.strip(),
+                            output
+                        )
+                        output.seek(0)
+                        st.download_button(
+                            label="Скачать Excel (RuStat)",
+                            data=output,
+                            file_name=f"RuStat_{export_team}_{export_season}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            key="download_rustat"
+                        )
+                    except Exception as e:
+                        st.error(f"Ошибка: {e}")
 
             if st.button("📥 Экспорт в Excel", key="export_match"):
                 output = io.BytesIO()
