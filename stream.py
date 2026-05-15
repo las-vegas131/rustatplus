@@ -79,7 +79,6 @@ NEGATIVE_METRICS = [
     'dribbles_unsuccessful_p90', 'bad_ball_control_p90', 'offsides_p90',
     'yellow_cards_p90', 'red_cards_p90', 'mistakes_goals_p90', 'mistakes_chances_p90',
     'fouls_p90', 'actions_unsuccessful_p90',
-    # для матчей
     'lost_balls', 'lost_balls_own_half', 'individual_ball_losses',
     'lost_balls_after_passes', 'challenges_unsuccessful',
     'dribbles_unsuccessful', 'bad_ball_control', 'offsides',
@@ -234,7 +233,7 @@ def check_db_connection():
 
 check_db_connection()
 
-# -------------------- ФУНКЦИИ АНАЛИЗА (общие) --------------------
+# -------------------- ФУНКЦИИ АНАЛИЗА --------------------
 def load_settings():
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -269,7 +268,168 @@ def minmax_normalize(series):
         return pd.Series(0.5, index=s.index)
     return (s - min_val) / (max_val - min_val)
 
-# -------------------- МАТЧЕВАЯ СТАТИСТИКА (без нормализации на 90 минут) --------------------
+@st.cache_data
+def calculate_ratings(df, position_weights, league_col='league'):
+    if league_col in df.columns:
+        result_dfs = []
+        for _, group_df in df.groupby(league_col):
+            rated = _calculate_ratings_for_group(group_df, position_weights)
+            result_dfs.append(rated)
+        return pd.concat(result_dfs, ignore_index=True)
+    else:
+        return _calculate_ratings_for_group(df, position_weights)
+
+def _calculate_ratings_for_group(df, position_weights):
+    all_used = set()
+    for pos_weights in position_weights.values():
+        for m, w in pos_weights.items():
+            if w != 0:
+                all_used.add(m)
+    valid_metrics = [m for m in all_used if m in df.columns]
+    if not valid_metrics:
+        df['rating'] = 50.0
+        return df
+    norm_cols = {}
+    for m in valid_metrics:
+        df[f'{m}_norm'] = minmax_normalize(df[m])
+        norm_cols[m] = f'{m}_norm'
+
+    def calc_row(row):
+        pos = get_position_group(row.get('position', ''))
+        weights = position_weights.get(pos, {})
+        if not weights:
+            return 50.0
+        pos_sum = 0.0; pos_weight_sum = 0.0
+        neg_sum = 0.0; neg_weight_sum = 0.0
+        for m, w in weights.items():
+            if w == 0 or m not in valid_metrics:
+                continue
+            col = norm_cols.get(m)
+            if col and pd.notna(row[col]):
+                if m in NEGATIVE_METRICS:
+                    neg_sum += (1.0 - row[col]) * abs(w)
+                    neg_weight_sum += abs(w)
+                else:
+                    pos_sum += row[col] * w
+                    pos_weight_sum += w
+        pos_score = pos_sum / pos_weight_sum if pos_weight_sum > 0 else 0.5
+        neg_score = neg_sum / neg_weight_sum if neg_weight_sum > 0 else 0.5
+        return 100 * (pos_score + neg_score) / 2
+
+    df['rating'] = df.apply(calc_row, axis=1).round(1)
+    return df
+
+def format_metric_with_detail(metric, value, player_row):
+    if metric.endswith('_pct') or metric == 'pass_accuracy':
+        base_col = None
+        if metric == 'pass_accuracy': base_col = 'passes'
+        elif metric == 'dribbles_success_pct': base_col = 'dribbles'
+        elif metric == 'tackles_success_pct': base_col = 'tackles'
+        elif metric == 'challenges_won_pct': base_col = 'challenges'
+        elif metric == 'air_challenges_won_pct': base_col = 'air_challenges'
+        elif metric == 'crosses_accuracy': base_col = 'crosses'
+        elif metric == 'progressive_passes_accuracy': base_col = 'progressive_passes'
+        elif metric == 'passes_final_third_accuracy': base_col = 'passes_final_third'
+        elif metric == 'short_passes_accuracy': base_col = 'short_passes'
+        elif metric == 'long_passes_accuracy': base_col = 'long_passes'
+        elif metric == 'passes_into_penalty_box_accuracy': base_col = 'passes_into_penalty_box'
+        elif metric == 'super_long_passes_accuracy': base_col = 'super_long_passes'
+        elif metric == 'dribbling_final_third_success_pct': base_col = 'dribbling_final_third'
+        elif metric == 'defensive_challenges_won_pct': base_col = 'defensive_challenges'
+        elif metric == 'attacking_challenges_won_pct': base_col = 'attacking_challenges'
+        if base_col and base_col in player_row:
+            total = player_row[base_col]
+            if pd.notna(total) and total > 0:
+                successful = int(round(total * value / 100))
+                return f"{value:.1f}% ({successful}/{int(total)})"
+        return f"{value:.1f}%"
+    else:
+        return f"{value:.2f}"
+
+def build_position_tables(df, position_weights):
+    tables = {}
+    positions = ['FW', 'AM', 'CM', 'FB', 'CB']
+    for pos in positions:
+        pos_df = df[df['position'].map(get_position_group) == pos].copy()
+        if pos_df.empty:
+            tables[pos] = ([], [])
+            continue
+        metrics = [m for m, w in position_weights.get(pos, {}).items() if w != 0 and m in df.columns]
+        if not metrics:
+            tables[pos] = ([], [])
+            continue
+
+        for m in metrics:
+            col = pos_df[m]
+            min_val, max_val = col.min(), col.max()
+            if max_val - min_val == 0:
+                pos_df[f'{m}_norm_pos'] = 0.5
+            else:
+                pos_df[f'{m}_norm_pos'] = (col - min_val) / (max_val - min_val)
+            if m in NEGATIVE_METRICS:
+                pos_df[f'{m}_norm_pos'] = 1.0 - pos_df[f'{m}_norm_pos']
+
+        max_vals = {m: pos_df[f'{m}_norm_pos'].max() for m in metrics}
+        min_vals = {m: pos_df[f'{m}_norm_pos'].min() for m in metrics}
+
+        rows = []
+        for _, player_row in pos_df.iterrows():
+            row_data = [player_row['player'], int(player_row['minutes']), f"{player_row['rating']:.1f}"]
+            for m in metrics:
+                val = player_row[m]
+                formatted = format_metric_with_detail(m, val, player_row)
+                norm_val = player_row[f'{m}_norm_pos']
+                is_max = (norm_val == max_vals[m])
+                is_min = (norm_val == min_vals[m])
+                if is_max and not is_min:
+                    formatted = f"🟢 {formatted}"
+                elif is_min and not is_max:
+                    formatted = f"🔴 {formatted}"
+                row_data.append(formatted)
+            rows.append(row_data)
+
+        headers = ['Игрок', 'Мин', 'Рейтинг'] + [METRIC_NAMES_RU.get(m, m) for m in metrics]
+        tables[pos] = (rows, headers)
+    return tables
+
+def build_main_table(df, selected_metrics):
+    metrics = [m for m in selected_metrics if m in df.columns]
+    if not metrics:
+        return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
+
+    norm_cols = {}
+    for m in metrics:
+        col = df[m]
+        min_val, max_val = col.min(), col.max()
+        if max_val - min_val == 0:
+            norm_cols[m] = pd.Series(0.5, index=df.index)
+        else:
+            norm_cols[m] = (col - min_val) / (max_val - min_val)
+        if m in NEGATIVE_METRICS:
+            norm_cols[m] = 1.0 - norm_cols[m]
+
+    max_vals = {m: norm_cols[m].max() for m in metrics}
+    min_vals = {m: norm_cols[m].min() for m in metrics}
+
+    main_headers = ['№','Игрок','Поз','Мин','Рейтинг'] + [METRIC_NAMES_RU.get(m, m) for m in metrics]
+    main_data = []
+    for i, (_, row) in enumerate(df.iterrows(), start=1):
+        row_data = [i, row['player'], row['position'], int(row['minutes']), f"{row['rating']:.1f}"]
+        for m in metrics:
+            val = row[m]
+            detail = format_metric_with_detail(m, val, row)
+            norm_val = norm_cols[m].loc[row.name]
+            is_max = (norm_val == max_vals[m])
+            is_min = (norm_val == min_vals[m])
+            if is_max and not is_min:
+                detail = f"🟢 {detail}"
+            elif is_min and not is_max:
+                detail = f"🔴 {detail}"
+            row_data.append(detail)
+        main_data.append(row_data)
+    return pd.DataFrame(main_data, columns=main_headers)
+
+# -------------------- МАТЧЕВАЯ СТАТИСТИКА --------------------
 MATCH_METRIC_NAMES_RU = {
     'goals': 'Голы', 'assists': 'Голевые передачи',
     'shots': 'Удары', 'shots_on_target': 'Удары в створ',
@@ -428,8 +588,7 @@ for pos in DEFAULT_MATCH_WEIGHTS:
         if m not in DEFAULT_MATCH_WEIGHTS[pos]:
             DEFAULT_MATCH_WEIGHTS[pos][m] = 0.0
 
-def format_match_metric(metric, value, player_row, avg_val=None, season_val=None):
-    """Форматирует метрику матча с опциональным сравнением со средним по лиге и с сезоном."""
+def format_match_metric(metric, value, player_row, league_avg=None, player_season_val=None):
     if pd.isna(value):
         return "-"
     try:
@@ -437,79 +596,101 @@ def format_match_metric(metric, value, player_row, avg_val=None, season_val=None
     except (ValueError, TypeError):
         return str(value)
 
-    # Базовое форматирование значения
-    formatted_value = ""
+    # Основное значение
     if metric.endswith('_pct') or metric == 'pass_accuracy':
-        formatted_value = f"{value:.1f}%"
-    elif metric in ['goals', 'assists', 'xG', 'yellow_cards', 'red_cards',
-                    'mistakes_goals', 'mistakes_chances', 'fouls', 'fouls_suffered']:
-        formatted_value = f"{value:.2f}"
-    else:
-        if value == int(value):
-            formatted_value = str(int(value))
+        base_col = None
+        if metric == 'pass_accuracy': base_col = 'passes'
+        elif metric == 'dribbles_success_pct': base_col = 'dribbles'
+        elif metric == 'tackles_success_pct': base_col = 'tackles'
+        elif metric == 'challenges_won_pct': base_col = 'challenges'
+        elif metric == 'air_challenges_won_pct': base_col = 'air_challenges'
+        elif metric == 'crosses_accuracy': base_col = 'crosses'
+        elif metric == 'progressive_passes_accuracy': base_col = 'progressive_passes'
+        elif metric == 'passes_final_third_accuracy': base_col = 'passes_final_third'
+        elif metric == 'short_passes_accuracy': base_col = 'short_passes'
+        elif metric == 'long_passes_accuracy': base_col = 'long_passes'
+        elif metric == 'passes_into_penalty_box_accuracy': base_col = 'passes_into_penalty_box'
+        elif metric == 'super_long_passes_accuracy': base_col = 'super_long_passes'
+        elif metric == 'dribbling_final_third_success_pct': base_col = 'dribbling_final_third'
+        elif metric == 'defensive_challenges_won_pct': base_col = 'defensive_challenges'
+        elif metric == 'attacking_challenges_won_pct': base_col = 'attacking_challenges'
+        elif metric == 'shots_on_target_pct': base_col = 'shots'
+        if base_col and base_col in player_row:
+            total = player_row[base_col]
+            if pd.notna(total) and total > 0:
+                successful = int(round(total * value / 100))
+                main_str = f"{value:.1f}% ({successful}/{int(total)})"
+            else:
+                main_str = f"{value:.1f}%"
         else:
-            formatted_value = f"{value:.2f}"
-
-    # Добавляем сравнение со средним по лиге (цветной фон)
-    style = ""
-    if avg_val is not None and pd.notna(avg_val):
-        try:
-            avg_val = float(avg_val)
-            if metric in NEGATIVE_METRICS:
-                # Для негативных метрик: меньше = лучше
-                better = value < avg_val
-            else:
-                better = value > avg_val
-            color = "#e6f3ff" if better else "#f5e6d3"  # светло-синий или светло-коричневый
-            style = f"background-color: {color};"
-        except (ValueError, TypeError):
-            pass
-
-    # Добавляем сравнение с сезоном (стрелки)
-    arrows = ""
-    if season_val is not None and pd.notna(season_val):
-        try:
-            season_val = float(season_val)
-            if metric in NEGATIVE_METRICS:
-                better_season = value < season_val
-            else:
-                better_season = value > season_val
-            if better_season:
-                arrows = " 🔼🔼"
-            else:
-                arrows = " 🔽🔽"
-        except (ValueError, TypeError):
-            pass
-
-    # Собираем итоговую строку с HTML-стилем
-    if style:
-        return f'<span style="{style} padding: 2px 6px; border-radius: 4px;">{formatted_value}{arrows}</span>'
+            main_str = f"{value:.1f}%"
     else:
-        return formatted_value + arrows
+        accuracy_col = None
+        if metric + '_accuracy' in player_row:
+            accuracy_col = metric + '_accuracy'
+        elif metric + '_success_pct' in player_row:
+            accuracy_col = metric + '_success_pct'
+        elif metric == 'shots' and 'shots_on_target' in player_row:
+            shots_on_target = player_row.get('shots_on_target')
+            if pd.notna(shots_on_target):
+                main_str = f"{int(shots_on_target)}/{int(value)}"
+            else:
+                main_str = f"{value:.2f}"
+        elif metric in ['goals', 'assists', 'xG', 'yellow_cards', 'red_cards',
+                        'mistakes_goals', 'mistakes_chances', 'fouls', 'fouls_suffered']:
+            main_str = f"{value:.2f}"
+        else:
+            if accuracy_col:
+                acc_val = player_row.get(accuracy_col)
+                total = value
+                if pd.notna(acc_val) and pd.notna(total) and total > 0:
+                    if acc_val <= 100:
+                        successful = int(round(total * acc_val / 100))
+                    else:
+                        successful = int(acc_val)
+                    main_str = f"{successful}/{int(total)}"
+                else:
+                    main_str = f"{int(value)}" if value == int(value) else f"{value:.2f}"
+            else:
+                main_str = f"{int(value)}" if value == int(value) else f"{value:.2f}"
 
-def get_league_averages(league_name, season):
-    """Возвращает Series средних значений по лиге/сезону для матчевых метрик."""
-    df = load_from_db([league_name], [season])
-    if df is None or df.empty:
-        return None
-    # Для матчей используем абсолютные метрики (без _p90)
-    # Поэтому нам нужны средние по абсолютным показателям за сезон.
-    # Но в load_from_db мы вычисляем _p90 для сезонных данных.
-    # Чтобы получить абсолютные средние, проще сделать отдельный запрос или использовать уже загруженные данные.
-    # Поскольку load_from_db возвращает DataFrame с абсолютными значениями и _p90,
-    # мы можем взять средние по абсолютным колонкам (которые совпадают с MATCH_ALL_METRICS).
-    avg = {}
-    for m in MATCH_ALL_METRICS:
-        if m in df.columns:
-            avg[m] = df[m].mean()
-    return pd.Series(avg)
+    # Добавляем стрелку сравнения с сезоном в скобках
+    if player_season_val is not None and pd.notna(player_season_val):
+        try:
+            season_val = float(player_season_val)
+            if not pd.isna(season_val):
+                if metric in NEGATIVE_METRICS:
+                    if value < season_val:
+                        main_str += " (↑)"
+                    elif value > season_val:
+                        main_str += " (↓)"
+                else:
+                    if value > season_val:
+                        main_str += " (↑)"
+                    elif value < season_val:
+                        main_str += " (↓)"
+        except:
+            pass
 
-def get_player_season_stats_df(league_name, season):
-    """Загружает сезонную статистику игроков (абсолютные значения) для сравнения с матчем."""
-    # Используем load_from_db, но нам нужны абсолютные значения.
-    # load_from_db добавляет _p90, но и абсолютные колонки остаются.
-    # Поэтому просто вернём df из load_from_db.
-    return load_from_db([league_name], [season])
+    # Цветовое оформление относительно лиги
+    if league_avg is not None and pd.notna(league_avg):
+        try:
+            avg = float(league_avg)
+            if not pd.isna(avg):
+                if metric in NEGATIVE_METRICS:
+                    if value < avg:
+                        return f'<span style="background-color: #ADD8E6; padding: 2px 4px;">{main_str}</span>'
+                    elif value > avg:
+                        return f'<span style="background-color: #DEB887; padding: 2px 4px;">{main_str}</span>'
+                else:
+                    if value > avg:
+                        return f'<span style="background-color: #ADD8E6; padding: 2px 4px;">{main_str}</span>'
+                    elif value < avg:
+                        return f'<span style="background-color: #DEB887; padding: 2px 4px;">{main_str}</span>'
+        except:
+            pass
+
+    return main_str
 
 @st.cache_data
 def calculate_match_ratings(df, position_weights, league_col='league'):
@@ -562,7 +743,7 @@ def _calculate_match_ratings_for_group(df, position_weights):
     df['rating'] = df.apply(calc_row, axis=1).round(1)
     return df
 
-def build_match_position_tables(df, position_weights, avg_series=None, season_df=None):
+def build_match_position_tables(df, position_weights, league_avg=None, player_season_map=None):
     tables = {}
     positions = ['FW', 'AM', 'CM', 'FB', 'CB']
     for pos in positions:
@@ -590,24 +771,18 @@ def build_match_position_tables(df, position_weights, avg_series=None, season_df
 
         rows = []
         for _, player_row in pos_df.iterrows():
-            row_data = [player_row['player'], int(player_row['minutes']), f"{player_row['rating']:.1f}"]
+            player_name = player_row['player']
+            row_data = [player_name, int(player_row['minutes']), f"{player_row['rating']:.1f}"]
             for m in metrics:
                 val = player_row[m]
-                # Получаем среднее по лиге
-                avg_val = avg_series[m] if (avg_series is not None and m in avg_series) else None
-                # Получаем сезонное значение игрока
-                season_val = None
-                if season_df is not None:
-                    player_name = player_row['player']
-                    season_row = season_df[season_df['player'] == player_name]
-                    if not season_row.empty and m in season_row.columns:
-                        season_val = season_row.iloc[0][m]
-                formatted = format_match_metric(m, val, player_row, avg_val=avg_val, season_val=season_val)
+                la = league_avg.get(m) if league_avg else None
+                psv = None
+                if player_season_map and player_name in player_season_map:
+                    psv = player_season_map[player_name].get(m)
+                formatted = format_match_metric(m, val, player_row, league_avg=la, player_season_val=psv)
                 norm_val = player_row[f'{m}_norm_pos']
                 is_max = (norm_val == max_vals[m])
                 is_min = (norm_val == min_vals[m])
-                # Добавляем подсветку лучшего/худшего в позиции (но она может конфликтовать с цветом avg)
-                # Поэтому оставим стрелки и цвет для avg, а для позиции просто текст с иконками
                 if is_max and not is_min:
                     formatted = f"🟢 {formatted}"
                 elif is_min and not is_max:
@@ -615,23 +790,20 @@ def build_match_position_tables(df, position_weights, avg_series=None, season_df
                 row_data.append(formatted)
             rows.append(row_data)
 
-        # Формируем заголовки с средними по лиге
         headers = ['Игрок', 'Мин', 'Рейтинг']
         for m in metrics:
-            name = MATCH_METRIC_NAMES_RU.get(m, m)
-            if avg_series is not None and m in avg_series:
-                avg_val = avg_series[m]
-                if pd.notna(avg_val):
-                    headers.append(f"{name} ({avg_val:.2f})")
+            header = MATCH_METRIC_NAMES_RU.get(m, m)
+            if league_avg and m in league_avg:
+                avg_val = league_avg[m]
+                if m.endswith('_pct') or m == 'pass_accuracy':
+                    header += f"<br><small>(ср. {avg_val:.1f}%)</small>"
                 else:
-                    headers.append(name)
-            else:
-                headers.append(name)
-
+                    header += f"<br><small>(ср. {avg_val:.2f})</small>"
+            headers.append(header)
         tables[pos] = (rows, headers)
     return tables
 
-def build_match_main_table(df, selected_metrics, avg_series=None, season_df=None):
+def build_match_main_table(df, selected_metrics, league_avg=None, player_season_map=None):
     metrics = [m for m in selected_metrics if m in df.columns]
     if not metrics:
         return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
@@ -650,32 +822,28 @@ def build_match_main_table(df, selected_metrics, avg_series=None, season_df=None
     max_vals = {m: norm_cols[m].max() for m in metrics}
     min_vals = {m: norm_cols[m].min() for m in metrics}
 
-    # Заголовки с средними
     main_headers = ['№','Игрок','Поз','Мин','Рейтинг']
     for m in metrics:
-        name = MATCH_METRIC_NAMES_RU.get(m, m)
-        if avg_series is not None and m in avg_series:
-            avg_val = avg_series[m]
-            if pd.notna(avg_val):
-                main_headers.append(f"{name} ({avg_val:.2f})")
+        header = MATCH_METRIC_NAMES_RU.get(m, m)
+        if league_avg and m in league_avg:
+            avg_val = league_avg[m]
+            if m.endswith('_pct') or m == 'pass_accuracy':
+                header += f"<br><small>(ср. {avg_val:.1f}%)</small>"
             else:
-                main_headers.append(name)
-        else:
-            main_headers.append(name)
+                header += f"<br><small>(ср. {avg_val:.2f})</small>"
+        main_headers.append(header)
 
     main_data = []
     for i, (_, row) in enumerate(df.iterrows(), start=1):
-        row_data = [i, row['player'], row['position'], int(row['minutes']), f"{row['rating']:.1f}"]
+        player_name = row['player']
+        row_data = [i, player_name, row['position'], int(row['minutes']), f"{row['rating']:.1f}"]
         for m in metrics:
             val = row[m]
-            avg_val = avg_series[m] if (avg_series is not None and m in avg_series) else None
-            season_val = None
-            if season_df is not None:
-                player_name = row['player']
-                season_row = season_df[season_df['player'] == player_name]
-                if not season_row.empty and m in season_row.columns:
-                    season_val = season_row.iloc[0][m]
-            detail = format_match_metric(m, val, row, avg_val=avg_val, season_val=season_val)
+            la = league_avg.get(m) if league_avg else None
+            psv = None
+            if player_season_map and player_name in player_season_map:
+                psv = player_season_map[player_name].get(m)
+            detail = format_match_metric(m, val, row, league_avg=la, player_season_val=psv)
             norm_val = norm_cols[m].loc[row.name]
             is_max = (norm_val == max_vals[m])
             is_min = (norm_val == min_vals[m])
@@ -687,7 +855,7 @@ def build_match_main_table(df, selected_metrics, avg_series=None, season_df=None
         main_data.append(row_data)
     return pd.DataFrame(main_data, columns=main_headers)
 
-# -------------------- ЗАГРУЗКА СЕЗОННОЙ СТАТИСТИКИ ИЗ БД --------------------
+# -------------------- ЗАГРУЗКА ИЗ БД --------------------
 def load_from_db(league_names, seasons, teams=None):
     conn = psycopg2.connect(**get_db_config())
     query = """
@@ -807,7 +975,28 @@ def load_from_db(league_names, seasons, teams=None):
 
     return df
 
-# -------------------- ИМПОРТ СЕЗОННОГО EXCEL --------------------
+def get_league_averages(league_name, season):
+    """Возвращает словарь средних абсолютных значений по лиге и сезону (без p90)."""
+    df = load_from_db([league_name], [season])
+    if df.empty:
+        return {}
+    # Вычисляем средние для абсолютных метрик (MATCH_ALL_METRICS)
+    avg = {}
+    for m in MATCH_ALL_METRICS:
+        if m in df.columns:
+            avg[m] = df[m].mean()
+    return avg
+
+def get_player_season_stats_df(league_name, season):
+    """Возвращает DataFrame с сезонной статистикой игроков."""
+    df = load_from_db([league_name], [season])
+    if df.empty:
+        return pd.DataFrame()
+    # Оставляем абсолютные метрики (MATCH_ALL_METRICS) и player, position
+    cols = ['player'] + [m for m in MATCH_ALL_METRICS if m in df.columns]
+    return df[cols]
+
+# -------------------- ИМПОРТ --------------------
 RENAME_DICT_IMPORT = {
     'Player': 'player', 'Position': 'position',
     'Minutes played': 'minutes_played',
@@ -1061,7 +1250,7 @@ def import_match_excel(uploaded_file_content, league_name, season, home_team, aw
     conn.close()
     return match_id
 
-# -------------------- ДИНАМИЧЕСКАЯ ЗАГРУЗКА СПИСКОВ --------------------
+# -------------------- ДИНАМИЧЕСКАЯ ЗАГРУЗКА --------------------
 @st.cache_data(ttl=60)
 def get_leagues():
     try:
@@ -1384,7 +1573,7 @@ def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values
     )
     return fig
 
-# -------------------- ПОЛУЧЕНИЕ СРЕДНИХ ХАРАКТЕРИСТИК --------------------
+# -------------------- СРЕДНИЕ --------------------
 def get_average_series(radar_metrics, full_df):
     avg_source = st.session_state.get('avg_source', 'Текущие данные')
     if avg_source == 'Текущие данные' and full_df is not None:
@@ -1400,7 +1589,7 @@ def get_average_series(radar_metrics, full_df):
                     return df_league[radar_metrics].mean()
     return None
 
-# -------------------- ИНТЕРФЕЙС STREAMLIT --------------------
+# -------------------- ИНТЕРФЕЙС --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
 st.title("Анализ футболистов InStat")
 
@@ -1420,10 +1609,6 @@ if 'avg_league' not in st.session_state:
     st.session_state.avg_league = None
 if 'avg_season' not in st.session_state:
     st.session_state.avg_season = None
-if 'match_compare_league' not in st.session_state:
-    st.session_state.match_compare_league = None
-if 'match_compare_season' not in st.session_state:
-    st.session_state.match_compare_season = None
 
 with st.sidebar:
     st.header("📤 Импорт Excel")
@@ -1447,7 +1632,7 @@ with st.sidebar:
                                 st.success(f"Импортировано {cnt} игроков")
                             else:
                                 st.error("Импорт не удался")
-        else:  # Матч
+        else:
             existing_leagues = get_leagues()
             if not existing_leagues:
                 st.error("Нет доступных лиг в БД.")
@@ -1545,6 +1730,23 @@ with st.sidebar:
             if selected_matches_labels:
                 teams_in_league = get_teams_for_league(match_league_analysis)
                 team_choice = st.radio("Команда", ["Обе", "Хозяева", "Гости"], key="match_team_choice")
+
+                # Сравнение с лигой
+                st.subheader("📊 Сравнение с лигой")
+                comp_league = st.selectbox("Лига для сравнения", all_leagues, index=all_leagues.index(match_league_analysis) if match_league_analysis in all_leagues else 0, key="comp_league")
+                seasons_for_comp = get_seasons_for_leagues([comp_league])
+                # Определяем сезон по умолчанию (первый доступный)
+                default_season_idx = 0
+                if seasons_for_comp:
+                    # Попробуем найти тот же сезон, что у первого выбранного матча
+                    first_match_info = matches_in_league[0] if matches_in_league else None
+                    if first_match_info:
+                        try:
+                            default_season_idx = seasons_for_comp.index(first_match_info[3])
+                        except:
+                            pass
+                comp_season = st.selectbox("Сезон для сравнения", seasons_for_comp, index=default_season_idx, key="comp_season")
+
                 if st.button("Загрузить матчи", use_container_width=True):
                     with st.spinner("Загрузка матчей..."):
                         new_matches = {}
@@ -1577,40 +1779,32 @@ with st.sidebar:
                                 df_match = df_match.sort_values('rating', ascending=False).reset_index(drop=True)
                                 new_matches[match_id] = {
                                     'df': df_match,
-                                    'label': label,
-                                    'league': match_info[2],
-                                    'season': match_info[3],
+                                    'label': label
                                 }
                         if new_matches:
                             st.session_state.df_matches = new_matches
+                            # Загружаем средние по лиге для сравнения
+                            league_avg = get_league_averages(comp_league, comp_season)
+                            player_season_df = get_player_season_stats_df(comp_league, comp_season)
+                            player_season_map = {}
+                            if not player_season_df.empty:
+                                for _, row in player_season_df.iterrows():
+                                    player_season_map[row['player']] = row.to_dict()
+                            # Строим таблицы для каждого матча с учётом сравнения
+                            st.session_state.match_tables = {}
+                            for mid, data in new_matches.items():
+                                df = data['df']
+                                pos_tables = build_match_position_tables(df, DEFAULT_MATCH_WEIGHTS,
+                                                                          league_avg=league_avg,
+                                                                          player_season_map=player_season_map)
+                                st.session_state.match_tables[mid] = pos_tables
+                            st.session_state.league_avg = league_avg
+                            st.session_state.player_season_map = player_season_map
                             st.success(f"Загружено {len(new_matches)} матчей")
                         else:
                             st.warning("Нет данных по выбранным матчам")
 
-    # Настройки сравнения для матчей
-    if st.session_state.df_matches:
-        st.header("📊 Сравнение с лигой")
-        compare_league = st.selectbox("Лига для сравнения", all_leagues,
-                                      index=all_leagues.index(match_league_analysis) if match_league_analysis in all_leagues else 0,
-                                      key="compare_league")
-        if compare_league:
-            seasons_compare = get_seasons_for_leagues([compare_league])
-            # По умолчанию берём сезон первого загруженного матча или любой доступный
-            default_season = list(st.session_state.df_matches.values())[0]['season'] if st.session_state.df_matches else None
-            if default_season and default_season in seasons_compare:
-                default_idx = seasons_compare.index(default_season)
-            else:
-                default_idx = 0
-            compare_season = st.selectbox("Сезон для сравнения", seasons_compare, index=default_idx, key="compare_season")
-            if st.button("Применить сравнение", use_container_width=True):
-                st.session_state.match_compare_league = compare_league
-                st.session_state.match_compare_season = compare_season
-                st.success("Сравнение обновлено")
-        else:
-            st.session_state.match_compare_league = None
-            st.session_state.match_compare_season = None
-
-    # Настройки весов (общие)
+    # Настройки весов
     st.header("⚙️ Веса")
     if st.button("Редактор весов", use_container_width=True):
         st.session_state.show_weights_editor = True
@@ -1637,7 +1831,7 @@ with st.sidebar:
     else:
         avg_league = None; avg_season = None
 
-# -------------------- ОСНОВНАЯ ОБЛАСТЬ (ВКЛАДКИ) --------------------
+# -------------------- ОСНОВНАЯ ОБЛАСТЬ --------------------
 tab_season, tab_match = st.tabs(["📈 Сезон", "⚽ Матч"])
 
 with tab_season:
@@ -1738,17 +1932,20 @@ with tab_season:
         st.info("Загрузите сезонные данные (в боковой панели)")
 
 with tab_match:
-    if st.session_state.df_matches:
-        # Получаем средние по лиге и сезонные данные игроков, если выбрано сравнение
-        avg_series = None
-        season_df = None
-        if st.session_state.match_compare_league and st.session_state.match_compare_season:
-            avg_series = get_league_averages(st.session_state.match_compare_league, st.session_state.match_compare_season)
-            season_df = get_player_season_stats_df(st.session_state.match_compare_league, st.session_state.match_compare_season)
-            if season_df is not None:
-                # Отфильтруем только нужных игроков? Нет, load_from_db возвращает всех, это ок.
-                pass
+    # Применяем CSS для уменьшения шрифта в таблицах матча
+    st.markdown("""
+    <style>
+    .match-table table {
+        font-size: 12px;
+    }
+    .match-table th, .match-table td {
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
+    if st.session_state.df_matches:
         match_ids = list(st.session_state.df_matches.keys())
         match_labels = [st.session_state.df_matches[mid]['label'] for mid in match_ids]
         selected_label = st.selectbox("Активный матч", match_labels, key="active_match_selector")
@@ -1760,6 +1957,12 @@ with tab_match:
 
         if active_match_id is not None:
             df_active = st.session_state.df_matches[active_match_id]['df']
+            # Используем сохранённые таблицы с сравнением, если есть
+            if 'match_tables' in st.session_state and active_match_id in st.session_state.match_tables:
+                position_tables_active = st.session_state.match_tables[active_match_id]
+            else:
+                # Запасной вариант без сравнения
+                position_tables_active = build_match_position_tables(df_active, DEFAULT_MATCH_WEIGHTS)
 
             all_metrics = [m for m in MATCH_ALL_METRICS if m in df_active.columns]
             metric_names = {m: MATCH_METRIC_NAMES_RU.get(m, m) for m in all_metrics}
@@ -1778,31 +1981,47 @@ with tab_match:
             subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
 
             with subtabs[0]:
-                df_main = build_match_main_table(df_active, selected_metrics, avg_series=avg_series, season_df=season_df)
-                # Используем HTML-рендеринг, так как у нас есть HTML-стили
-                st.write(df_main.to_html(escape=False, index=False), unsafe_allow_html=True)
-                # Оставляем возможность клика для радара (придётся использовать другой подход, пока пропустим)
+                # Используем сравнение с лигой для общей таблицы
+                league_avg = st.session_state.get('league_avg')
+                player_season_map = st.session_state.get('player_season_map')
+                df_main = build_match_main_table(df_active, selected_metrics,
+                                                league_avg=league_avg,
+                                                player_season_map=player_season_map)
+                # Рендерим как HTML для поддержки стилей
+                st.write(f'<div class="match-table">{df_main.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
 
             for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
                 with subtabs[i]:
-                    pos_tables = build_match_position_tables(df_active, DEFAULT_MATCH_WEIGHTS, avg_series=avg_series, season_df=season_df)
-                    rows, headers = pos_tables.get(pos, ([], []))
+                    rows, headers = position_tables_active.get(pos, ([], []))
                     if rows:
                         numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
                         df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
-                        st.write(df_pos.to_html(escape=False, index=False), unsafe_allow_html=True)
+                        st.write(f'<div class="match-table">{df_pos.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
                     else:
                         st.info(f"Нет игроков позиции {pos}")
 
             if st.button("📥 Экспорт в Excel", key="export_match"):
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_main = build_match_main_table(df_active, selected_metrics, avg_series=avg_series, season_df=season_df)
+                    df_main = build_match_main_table(df_active, selected_metrics)
                     df_main.to_excel(writer, sheet_name='Общий рейтинг', index=False)
-                    for pos, (rows, headers) in build_match_position_tables(df_active, DEFAULT_MATCH_WEIGHTS, avg_series=avg_series, season_df=season_df).items():
+                    for pos, (rows, headers) in position_tables_active.items():
                         if rows:
                             df_pos = pd.DataFrame(rows, columns=headers)
                             df_pos.to_excel(writer, sheet_name=pos, index=False)
+                            from openpyxl.formatting.rule import ColorScaleRule
+                            from openpyxl.utils import get_column_letter
+                            ws = writer.sheets[pos]
+                            metric_columns = list(range(4, 4 + len(headers) - 3))
+                            for col_idx in metric_columns:
+                                col_letter = get_column_letter(col_idx)
+                                max_row = len(rows) + 1
+                                ws.conditional_formatting.add(
+                                    f'{col_letter}2:{col_letter}{max_row}',
+                                    ColorScaleRule(start_type='min', start_color='FFC7CE',
+                                                  mid_type='percentile', mid_value=50, mid_color='FFFFEB',
+                                                  end_type='max', end_color='C6EFCE')
+                                )
                 st.download_button(label="Скачать Excel", data=output.getvalue(), file_name="match_players_rating.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
         st.info("Загрузите матчи (в боковой панели)")
