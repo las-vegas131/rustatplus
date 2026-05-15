@@ -13,6 +13,10 @@ import psycopg2
 from dotenv import load_dotenv
 import plotly.graph_objects as go
 from datetime import date
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
+from collections import defaultdict
 
 warnings.filterwarnings('ignore')
 load_dotenv()
@@ -673,7 +677,7 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
         except:
             pass
 
-    # Кружок сравнения с лигой
+    # Кружок сравнения с лигой (заменён на цвет фона в экспорте, здесь оставляем для интерфейса)
     if league_avg is not None and pd.notna(league_avg):
         try:
             avg = float(league_avg)
@@ -1599,34 +1603,27 @@ def get_average_series(radar_metrics, full_df):
                     return df_league[radar_metrics].mean()
     return None
 
-# -------------------- ЭКСПОРТ В ФОРМАТЕ RuStat --------------------
-def export_matches_to_rustat(matches_dict, selected_match_ids, team_name, season_year, output_bytes_io):
+# -------------------- ЭКСПОРТ В ФОРМАТЕ RuStat (РАСШИРЕННЫЙ) --------------------
+def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
     """
-    Экспортирует выбранные матчи в Excel в формате RuStat.
-    matches_dict: dict {match_id: {'df': DataFrame, 'label': str}}
-    selected_match_ids: list
-    team_name: str
-    season_year: str
-    output_bytes_io: BytesIO
+    Расширенный экспорт матчей в Excel с группировкой по позициям и цветовой заливкой фона
+    (синий – выше среднего по лиге, коричневый – ниже).
     """
-    # Маппинг позиций на русские сокращения
-    position_ru = {
-        'FW': 'НАП', 'AM': 'ВОП', 'CM': 'НОП', 'FB': 'КЗ', 'CB': 'ЦЗ',
-        'GK': 'ВР', 'CF': 'НАП', 'ST': 'НАП', 'CDM': 'НОП', 'CAM': 'ВОП'
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+    from collections import defaultdict
+
+    # Маппинг позиций
+    position_ru_long = {
+        'FW': 'Нападающие', 'AM': 'Атакующие полузащитники',
+        'CM': 'Центральные полузащитники', 'FB': 'Крайние защитники',
+        'CB': 'Центральные защитники'
+    }
+    position_ru_short = {
+        'FW': 'НАП', 'AM': 'ВОП', 'CM': 'НОП', 'FB': 'КЗ', 'CB': 'ЦЗ'
     }
 
-    # Заголовки колонок в нужном порядке (как в образце)
-    ru_columns = [
-        'Амплуа', 'Игрок', 'Игра', 'Мин',
-        'ТТД/уд', 'ТТД у чужих ворот/уд', 'Удары/в створ',
-        'Фолы', 'Фолы на игроке',
-        'Передачи/точные', 'Передачи вперёд', 'Передачи в финальную треть',
-        'Передачи в финальной трети', 'Передачи в штрафную', 'Передачи ключевые',
-        'Навесы', 'Единоборства/удачные', 'В обороне/удачные', 'В атаке/удачные',
-        'Вверху/удачные', 'Отборы/удачные', 'Обводки/удачные',
-        'Перехваты/на чужой половине', 'Подборы/на чужой половине',
-        'Потери/на своей половине', 'Возвраты/на чужо половине'
-    ]
+    match_weights = st.session_state.match_settings
 
     def safe_int(val):
         if pd.isna(val) or val is None:
@@ -1636,161 +1633,225 @@ def export_matches_to_rustat(matches_dict, selected_match_ids, team_name, season
         except:
             return 0
 
-    def frac(total, accuracy_pct):
-        t = safe_int(total)
-        if t == 0:
-            return ''
-        acc = safe_int(accuracy_pct) if not pd.isna(accuracy_pct) else 0
-        succ = int(round(t * acc / 100))
-        return f"{t}/{succ}"
+    def format_value(metric, value, player_row, is_best, is_worst, season_val):
+        # Формируем основную строку (без кружков)
+        if metric.endswith('_pct') or metric == 'pass_accuracy':
+            base_col = None
+            if metric == 'pass_accuracy': base_col = 'passes'
+            elif metric == 'dribbles_success_pct': base_col = 'dribbles'
+            elif metric == 'tackles_success_pct': base_col = 'tackles'
+            elif metric == 'challenges_won_pct': base_col = 'challenges'
+            elif metric == 'air_challenges_won_pct': base_col = 'air_challenges'
+            elif metric == 'crosses_accuracy': base_col = 'crosses'
+            else:
+                base_col = None
+            if base_col and base_col in player_row:
+                total = safe_int(player_row[base_col])
+                if total > 0:
+                    successful = int(round(total * value / 100))
+                    main_str = f"{value:.1f}% ({successful}/{total})"
+                else:
+                    main_str = f"{value:.1f}%"
+            else:
+                main_str = f"{value:.1f}%"
+        else:
+            accuracy_col = None
+            if metric + '_accuracy' in player_row:
+                accuracy_col = metric + '_accuracy'
+            elif metric + '_success_pct' in player_row:
+                accuracy_col = metric + '_success_pct'
+            elif metric == 'shots' and 'shots_on_target' in player_row:
+                shots_target = safe_int(player_row['shots_on_target'])
+                main_str = f"{shots_target}/{safe_int(value)}"
+            elif metric in ['goals', 'assists', 'xG', 'yellow_cards', 'red_cards',
+                            'mistakes_goals', 'mistakes_chances', 'fouls', 'fouls_suffered',
+                            'key_passes', 'interceptions']:
+                main_str = f"{value:.1f}" if isinstance(value, float) and value % 1 != 0 else str(int(value))
+            else:
+                if accuracy_col:
+                    acc_val = player_row.get(accuracy_col, 0)
+                    total = safe_int(value)
+                    if total > 0:
+                        successful = int(round(total * acc_val / 100))
+                        main_str = f"{successful}/{total}"
+                    else:
+                        main_str = str(total)
+                else:
+                    main_str = str(safe_int(value))
 
-    rows = []
+        # Текстовые маркеры (без кружков)
+        markers = []
+        if is_best:
+            markers.append("🟢")
+        elif is_worst:
+            markers.append("🔴")
+        if season_val is not None and not pd.isna(season_val):
+            try:
+                s_val = float(season_val)
+                if metric in NEGATIVE_METRICS:
+                    if value < s_val:
+                        markers.append("↑")
+                    elif value > s_val:
+                        markers.append("↓")
+                else:
+                    if value > s_val:
+                        markers.append("↑")
+                    elif value < s_val:
+                        markers.append("↓")
+            except:
+                pass
+        if markers:
+            main_str = f"{' '.join(markers)} {main_str}"
+        return main_str
+
+    # Подготовка данных
+    all_matches_data = []
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
         if not data:
             continue
-        df = data['df']
+        df = data['df'].copy()
         opponent_label = data.get('label', '')
         if df.empty:
             continue
 
-        for _, player in df.iterrows():
-            pos_code = get_position_group(player.get('position', ''))
-            pos_ru = position_ru.get(pos_code, player.get('position', ''))
+        df['pos_group'] = df['position'].apply(get_position_group)
+        pos_metrics = {}
+        for pos in ['FW', 'AM', 'CM', 'FB', 'CB']:
+            metrics = [m for m, w in match_weights.get(pos, {}).items() if w != 0 and m in df.columns]
+            pos_metrics[pos] = metrics
 
-            minutes = safe_int(player.get('minutes', 0))
-            fouls = safe_int(player.get('fouls', 0))
-            fouls_suffered = safe_int(player.get('fouls_suffered', 0))
-            key_passes = safe_int(player.get('key_passes', 0))
-            interceptions = safe_int(player.get('interceptions', 0))
+        best_worst = {}
+        for pos in pos_metrics:
+            pos_df = df[df['pos_group'] == pos]
+            if pos_df.empty:
+                continue
+            best_worst[pos] = {}
+            for m in pos_metrics[pos]:
+                best_worst[pos][m] = {
+                    'max': pos_df[m].max(),
+                    'min': pos_df[m].min()
+                }
 
-            # ТТД/уд
-            actions_total = safe_int(player.get('actions', 0))
-            actions_success = safe_int(player.get('actions_successful', 0))
-            ttd = f"{actions_total}/{actions_success}" if actions_total > 0 else ''
+        for pos in pos_metrics:
+            pos_df = df[df['pos_group'] == pos]
+            if pos_df.empty:
+                continue
+            for _, player_row in pos_df.iterrows():
+                player_name = player_row['player']
+                minutes = safe_int(player_row.get('minutes', 0))
+                season_vals = player_season_map.get(player_name, {}) if player_season_map else {}
+                row_data = {
+                    'match_label': opponent_label,
+                    'player': player_name,
+                    'position_short': position_ru_short.get(pos, pos),
+                    'minutes': minutes,
+                }
+                for m in pos_metrics[pos]:
+                    val = player_row[m]
+                    is_best = (val == best_worst[pos][m]['max']) and (best_worst[pos][m]['max'] != best_worst[pos][m]['min'])
+                    is_worst = (val == best_worst[pos][m]['min']) and (best_worst[pos][m]['max'] != best_worst[pos][m]['min'])
+                    league_avg_val = league_avg.get(m) if league_avg else None
+                    season_val = season_vals.get(m) if season_vals else None
+                    formatted = format_value(m, val, player_row, is_best, is_worst, season_val)
+                    row_data[m] = formatted
+                    # Сохраняем числовое значение для сравнения с лигой (для заливки)
+                    if league_avg_val is not None:
+                        row_data[f'{m}_raw'] = val
+                        row_data[f'{m}_avg'] = league_avg_val
+                all_matches_data.append((pos, row_data))
 
-            # ТТД у чужих ворот/уд
-            opp_box_total = safe_int(player.get('actions_opp_box', 0))
-            opp_box_success = safe_int(player.get('actions_opp_box_success', 0))
-            ttd_opp = f"{opp_box_total}/{opp_box_success}" if opp_box_total > 0 else ''
-
-            # Удары/в створ
-            shots_total = safe_int(player.get('shots', 0))
-            shots_target = safe_int(player.get('shots_on_target', 0))
-            shots_str = f"{shots_total}/{shots_target}" if shots_total > 0 else ''
-
-            # Передачи/точные
-            passes_total = safe_int(player.get('passes', 0))
-            passes_acc = player.get('pass_accuracy', 0)
-            passes_str = frac(passes_total, passes_acc)
-
-            # Передачи вперёд (прогрессивные)
-            prog_total = safe_int(player.get('progressive_passes', 0))
-            prog_acc = player.get('progressive_passes_accuracy', 0)
-            prog_str = frac(prog_total, prog_acc)
-
-            # Передачи в финальную треть
-            final3_total = safe_int(player.get('passes_final_third', 0))
-            final3_acc = player.get('passes_final_third_accuracy', 0)
-            final3_str = frac(final3_total, final3_acc)
-
-            # Передачи в финальной трети (дублируем)
-            final3_str2 = final3_str
-
-            # Передачи в штрафную
-            penalty_total = safe_int(player.get('passes_into_penalty_box', 0))
-            penalty_acc = player.get('passes_into_penalty_box_accuracy', 0)
-            penalty_str = frac(penalty_total, penalty_acc)
-
-            # Навесы
-            crosses_total = safe_int(player.get('crosses', 0))
-            crosses_acc = player.get('crosses_accuracy', 0)
-            crosses_str = frac(crosses_total, crosses_acc)
-
-            # Единоборства
-            chall_total = safe_int(player.get('challenges', 0))
-            chall_acc = player.get('challenges_won_pct', 0)
-            chall_str = frac(chall_total, chall_acc)
-
-            # В обороне
-            def_total = safe_int(player.get('defensive_challenges', 0))
-            def_acc = player.get('defensive_challenges_won_pct', 0)
-            def_str = frac(def_total, def_acc)
-
-            # В атаке
-            att_total = safe_int(player.get('attacking_challenges', 0))
-            att_acc = player.get('attacking_challenges_won_pct', 0)
-            att_str = frac(att_total, att_acc)
-
-            # Вверху
-            air_total = safe_int(player.get('air_challenges', 0))
-            air_acc = player.get('air_challenges_won_pct', 0)
-            air_str = frac(air_total, air_acc)
-
-            # Отборы
-            tackles_total = safe_int(player.get('tackles', 0))
-            tackles_acc = player.get('tackles_success_pct', 0)
-            tackles_str = frac(tackles_total, tackles_acc)
-
-            # Обводки
-            drib_total = safe_int(player.get('dribbles', 0))
-            drib_acc = player.get('dribbles_success_pct', 0)
-            drib_str = frac(drib_total, drib_acc)
-
-            # Перехваты (нет отдельного на чужой половине, дублируем)
-            interceptions_str = f"{interceptions}/{interceptions}" if interceptions > 0 else ''
-
-            # Подборы/на чужой половине
-            loose_total = safe_int(player.get('loose_ball_recoveries', 0))
-            recover_opp = safe_int(player.get('ball_recoveries_opp_half', 0))
-            loose_str = f"{loose_total}/{recover_opp}" if loose_total > 0 else ''
-
-            # Потери/на своей половине
-            lost_total = safe_int(player.get('lost_balls', 0))
-            lost_own = safe_int(player.get('lost_balls_own_half', 0))
-            lost_str = f"{lost_total}/{lost_own}" if lost_total > 0 else ''
-
-            # Возвраты/на чужой половине
-            rec_total = safe_int(player.get('ball_recoveries', 0))
-            rec_opp = safe_int(player.get('ball_recoveries_opp_half', 0))
-            rec_str = f"{rec_total}/{rec_opp}" if rec_total > 0 else ''
-
-            row = [
-                pos_ru,
-                player.get('player', ''),
-                opponent_label,
-                minutes,
-                ttd, ttd_opp, shots_str,
-                fouls, fouls_suffered,
-                passes_str, prog_str, final3_str, final3_str2, penalty_str, key_passes,
-                crosses_str, chall_str, def_str, att_str, air_str, tackles_str, drib_str,
-                interceptions_str, loose_str, lost_str, rec_str
-            ]
-            rows.append(row)
-
-    if not rows:
+    if not all_matches_data:
         raise ValueError("Нет данных для экспорта")
 
-    df_export = pd.DataFrame(rows, columns=ru_columns)
+    # Группируем по позициям
+    pos_groups = defaultdict(list)
+    for pos, row in all_matches_data:
+        pos_groups[pos].append(row)
 
+    # Создаём Excel-файл
     with pd.ExcelWriter(output_bytes_io, engine='openpyxl') as writer:
-        df_export.to_excel(writer, startrow=3, index=False, sheet_name='Лист1')
-        workbook = writer.book
-        worksheet = writer.sheets['Лист1']
-        worksheet['A1'] = f"{team_name} {season_year} RuStat Игроки"
-        worksheet['A2'] = "Показатели"
-        worksheet['A3'] = ""
-        # Простая автоширина
-        for col in worksheet.columns:
-            max_len = 0
-            col_letter = col[0].column_letter
-            for cell in col:
-                try:
-                    if len(str(cell.value)) > max_len:
-                        max_len = len(str(cell.value))
-                except:
-                    pass
-            worksheet.column_dimensions[col_letter].width = min(max_len + 2, 30)
+        for pos, rows_list in pos_groups.items():
+            metrics = [m for m, w in match_weights.get(pos, {}).items() if w != 0]
+            headers = ['Игрок', 'Игра', 'Мин'] + [MATCH_METRIC_NAMES_RU.get(m, m) for m in metrics]
+            # Добавляем средние по лиге в заголовки
+            if league_avg:
+                for i, m in enumerate(metrics):
+                    if m in league_avg:
+                        avg_val = league_avg[m]
+                        if m.endswith('_pct') or m == 'pass_accuracy':
+                            headers[3+i] += f"\n(ср. {avg_val:.1f}%)"
+                        else:
+                            headers[3+i] += f"\n(ср. {avg_val:.2f})"
+
+            # Группируем строки по игрокам
+            player_matches = defaultdict(list)
+            for row in rows_list:
+                player_matches[row['player']].append(row)
+            sorted_players = sorted(player_matches.keys())
+
+            # Создаём новый лист вручную (чтобы применить заливку)
+            sheet_name = position_ru_long.get(pos, pos)
+            # Удаляем лист, если он существует (при перезаписи)
+            if sheet_name in writer.book.sheetnames:
+                std = writer.book[sheet_name]
+                writer.book.remove(std)
+            ws = writer.book.create_sheet(sheet_name)
+            # Записываем заголовки
+            for col_idx, header in enumerate(headers, start=1):
+                cell = ws.cell(row=1, column=col_idx, value=header)
+                cell.font = Font(bold=True)
+                cell.alignment = Alignment(horizontal='center')
+            # Записываем данные с заливкой
+            row_num = 2
+            for player in sorted_players:
+                matches = sorted(player_matches[player], key=lambda x: x['match_label'])
+                for match in matches:
+                    # Игрок
+                    ws.cell(row=row_num, column=1, value=match['player'])
+                    # Игра
+                    ws.cell(row=row_num, column=2, value=match['match_label'])
+                    # Мин
+                    ws.cell(row=row_num, column=3, value=match['minutes'])
+                    # Метрики
+                    for col_idx, m in enumerate(metrics, start=4):
+                        formatted_value = match.get(m, '')
+                        cell = ws.cell(row=row_num, column=col_idx, value=formatted_value)
+                        # Определяем цвет фона на основе сравнения с лигой
+                        raw_val = match.get(f'{m}_raw')
+                        avg_val = match.get(f'{m}_avg')
+                        if raw_val is not None and avg_val is not None:
+                            try:
+                                raw_f = float(raw_val)
+                                avg_f = float(avg_val)
+                                if m in NEGATIVE_METRICS:
+                                    # Для негативных: ниже среднего = хорошо -> синий, выше = плохо -> коричневый
+                                    if raw_f < avg_f:
+                                        cell.fill = PatternFill(start_color="9DC3E6", end_color="9DC3E6", fill_type="solid")  # светлый синий
+                                    elif raw_f > avg_f:
+                                        cell.fill = PatternFill(start_color="E6B89D", end_color="E6B89D", fill_type="solid")  # светлый коричневый
+                                else:
+                                    # Позитивные: выше среднего = хорошо -> синий
+                                    if raw_f > avg_f:
+                                        cell.fill = PatternFill(start_color="9DC3E6", end_color="9DC3E6", fill_type="solid")
+                                    elif raw_f < avg_f:
+                                        cell.fill = PatternFill(start_color="E6B89D", end_color="E6B89D", fill_type="solid")
+                            except:
+                                pass
+                    row_num += 1
+            # Автоширина колонок
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    try:
+                        if len(str(cell.value)) > max_len:
+                            max_len = len(str(cell.value))
+                    except:
+                        pass
+                ws.column_dimensions[col_letter].width = min(max_len + 2, 30)
+
+    st.success("Расширенный экспорт завершён")
 
 # -------------------- ИНТЕРФЕЙС --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
@@ -2211,9 +2272,9 @@ with tab_match:
                     else:
                         st.info(f"Нет игроков позиции {pos}")
 
-            # --- Экспорт в формате RuStat ---
+            # --- Экспорт в формате RuStat (расширенный) ---
             st.markdown("---")
-            st.subheader("📥 Экспорт в формате RuStat")
+            st.subheader("📥 Экспорт матчей (формат RuStat)")
             col_sel, col_team, col_season = st.columns([2, 1, 1])
             with col_sel:
                 export_match_ids = st.multiselect(
@@ -2238,16 +2299,18 @@ with tab_match:
                 with st.spinner("Формирование RuStat-отчёта..."):
                     output = io.BytesIO()
                     try:
-                        export_matches_to_rustat(
+                        export_matches_advanced(
                             st.session_state.df_matches,
                             export_match_ids,
                             export_team.strip(),
                             export_season.strip(),
+                            st.session_state.get('league_avg'),
+                            st.session_state.get('player_season_map'),
                             output
                         )
                         output.seek(0)
                         st.download_button(
-                            label="Скачать Excel (RuStat)",
+                            label="Скачать Excel",
                             data=output,
                             file_name=f"RuStat_{export_team}_{export_season}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2256,7 +2319,7 @@ with tab_match:
                     except Exception as e:
                         st.error(f"Ошибка: {e}")
 
-            if st.button("📥 Экспорт в Excel", key="export_match"):
+            if st.button("📥 Экспорт в Excel (стандартный)", key="export_match"):
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     df_main = build_match_main_table(df_active, selected_metrics)
