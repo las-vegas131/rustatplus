@@ -596,7 +596,7 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
     except (ValueError, TypeError):
         return str(value)
 
-    # Базовое значение на случай, если ни одна ветвь не сработает
+    # Базовое значение
     main_str = f"{value:.2f}"
 
     if metric.endswith('_pct') or metric == 'pass_accuracy':
@@ -674,21 +674,26 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
         except:
             pass
 
-    # Цветовое оформление относительно лиги
+    # Цветной кружок вместо фона (синий — лучше, коричневый — хуже)
     if league_avg is not None and pd.notna(league_avg):
         try:
             avg = float(league_avg)
             if not pd.isna(avg):
                 if metric in NEGATIVE_METRICS:
                     if value < avg:
-                        return f'<span style="background-color: #ADD8E6; padding: 2px 4px;">{main_str}</span>'
+                        circle = '<span style="color: #4169E1; font-size: 14px;">●</span> '
                     elif value > avg:
-                        return f'<span style="background-color: #DEB887; padding: 2px 4px;">{main_str}</span>'
+                        circle = '<span style="color: #8B4513; font-size: 14px;">●</span> '
+                    else:
+                        circle = ''
                 else:
                     if value > avg:
-                        return f'<span style="background-color: #ADD8E6; padding: 2px 4px;">{main_str}</span>'
+                        circle = '<span style="color: #4169E1; font-size: 14px;">●</span> '
                     elif value < avg:
-                        return f'<span style="background-color: #DEB887; padding: 2px 4px;">{main_str}</span>'
+                        circle = '<span style="color: #8B4513; font-size: 14px;">●</span> '
+                    else:
+                        circle = ''
+                return circle + main_str
         except:
             pass
 
