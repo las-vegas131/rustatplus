@@ -1606,10 +1606,7 @@ def get_average_series(radar_metrics, full_df):
 # -------------------- ЭКСПОРТ В ФОРМАТЕ RuStat (РАСШИРЕННЫЙ) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
     """
-    Экспорт матчевой статистики в формате RuStat:
-    - вертикальные заголовки (textRotation=255)
-    - закрепление столбцов A и B, строки 4 (freeze_panes = 'C5')
-    - группировка по игрокам (имя только в первой строке)
+    Экспорт матчевой статистики в формате RuStat с вертикальными заголовками.
     """
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment
@@ -1638,7 +1635,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         succ = int(round(t * acc / 100))
         return f"{t}/{succ}"
 
-    # Сбор данных
+    # Сбор данных (как и раньше)
     all_rows = []
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
@@ -1650,7 +1647,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
             continue
         df['pos_group'] = df['position'].apply(get_position_group)
 
-        # Лучшие/худшие
         best_worst = {}
         for pos in position_order:
             pos_df = df[df['pos_group'] == pos]
@@ -1729,7 +1725,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         ws[cell].font = Font(name='Calibri', size=11, bold=True)
         ws[cell].alignment = Alignment(horizontal='center')
 
-    # Заголовки (вертикальные)
+    # Заголовки (вертикальные через перенос текста и узкую ширину)
     headers = [
         'Амплуа', 'Игрок', 'Игра', 'Мин',
         'ТТД/уд', 'ТТД у чужих ворот/уд', 'Удары/в створ',
@@ -1741,20 +1737,22 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         'Перехваты/на чужой половине', 'Подборы/на чужой половине',
         'Потери/на своей половине', 'Возвраты/на чужо половине'
     ]
+    # Устанавливаем очень узкую ширину для всех колонок, кроме первых трёх
     for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=4, column=col_idx, value=header)
         cell.font = Font(name='Calibri', size=11, bold=True)
-        cell.alignment = Alignment(horizontal='center', vertical='center', textRotation=255, wrap_text=True)
-    
-    # Ширина колонок (подобрана для вертикальных заголовков)
-    col_widths = [8, 18, 15, 5, 8, 12, 8, 5, 6, 10, 10, 12, 12, 10, 10, 8, 12, 12, 10, 10, 8, 8, 12, 12, 12, 12]
-    for i, w in enumerate(col_widths, start=1):
-        ws.column_dimensions[get_column_letter(i)].width = w
+        # Для вертикального текста используем перенос строк и центрирование
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        # Ширина колонки: для первых трёх – шире, для остальных – 5 (чтобы текст переносился)
+        if col_idx <= 3:
+            ws.column_dimensions[get_column_letter(col_idx)].width = 15
+        else:
+            ws.column_dimensions[get_column_letter(col_idx)].width = 6
+    ws.row_dimensions[4].height = 120  # высота строки заголовков
 
-    # Закрепление: строка 4 и столбцы A и B (C5 закрепит область A1:B4 и оставит видимыми при прокрутке)
-    ws.freeze_panes = 'C5'
+    ws.freeze_panes = 'B5'
 
-    # Заполнение данных
+    # Заполнение данных (код такой же, как ранее)
     row_idx = 5
     for pos in position_order:
         rows_list = pos_groups.get(pos, [])
@@ -1838,7 +1836,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 ws.cell(row=row_idx, column=10, value=frac(match['passes_total'], match['passes_acc']))
                 ws.cell(row=row_idx, column=11, value=frac(match['prog_total'], match['prog_acc']))
                 ws.cell(row=row_idx, column=12, value=frac(match['ft_total'], match['ft_acc']))
-                ws.cell(row=row_idx, column=13, value=frac(match['ft_total'], match['ft_acc']))  # дубль
+                ws.cell(row=row_idx, column=13, value=frac(match['ft_total'], match['ft_acc']))
                 ws.cell(row=row_idx, column=14, value=frac(match['pen_total'], match['pen_acc']))
                 ws.cell(row=row_idx, column=15, value=match['key_passes'] if match['key_passes'] > 0 else '')
                 ws.cell(row=row_idx, column=16, value=frac(match['crosses_total'], match['crosses_acc']))
@@ -1865,7 +1863,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 cell.alignment = Alignment(horizontal='center', vertical='center')
 
     wb.save(output_bytes_io)
-    st.success("Экспорт завершён (вертикальные заголовки, закреплены столбцы А и B)")
+    st.success("Экспорт завершён с вертикальными заголовками")
 
 # -------------------- ИНТЕРФЕЙС --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
