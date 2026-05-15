@@ -1606,21 +1606,25 @@ def get_average_series(radar_metrics, full_df):
 # -------------------- ЭКСПОРТ В ФОРМАТЕ RuStat (РАСШИРЕННЫЙ) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
     """
-    Расширенный экспорт матчей в Excel с группировкой по позициям.
-    Цветные текстовые маркеры: ▲ (синий) – выше среднего по лиге, ▼ (коричневый) – ниже.
+    Расширенный экспорт матчей в Excel в формате RuStat:
+    - один лист, группировка по позициям (ЦЗ, КЗ, НОП, ВОП, НАП)
+    - шапка: team_name season_year RuStat Игроки / Показатели / пустая строка
+    - цветные текстовые маркеры: ▲ (синий) – выше среднего по лиге, ▼ (коричневый) – ниже
+    - маркеры 🟢/🔴 (лучший/худший в команде) и ↑/↓ (сравнение с сезоном)
     """
     from openpyxl.styles import Font, Alignment
     from openpyxl.utils import get_column_letter
     from collections import defaultdict
 
-    # Маппинг позиций
-    position_ru_long = {
-        'FW': 'Нападающие', 'AM': 'Атакующие полузащитники',
-        'CM': 'Центральные полузащитники', 'FB': 'Крайние защитники',
-        'CB': 'Центральные защитники'
-    }
     position_ru_short = {
         'FW': 'НАП', 'AM': 'ВОП', 'CM': 'НОП', 'FB': 'КЗ', 'CB': 'ЦЗ'
+    }
+    # Порядок вывода позиций (как в образце)
+    position_order = ['CB', 'FB', 'CM', 'AM', 'FW']   # ЦЗ, КЗ, НОП, ВОП, НАП
+    position_ru_long = {
+        'CB': 'Центральные защитники', 'FB': 'Крайние защитники',
+        'CM': 'Центральные полузащитники', 'AM': 'Атакующие полузащитники',
+        'FW': 'Нападающие'
     }
 
     match_weights = st.session_state.match_settings
@@ -1634,6 +1638,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
             return 0
 
     def format_value(metric, value, player_row, is_best, is_worst, season_val):
+        """Форматирует значение с маркерами 🟢/🔴 и ↑/↓ (без маркера лиги)"""
         main_str = ""
         if metric.endswith('_pct') or metric == 'pass_accuracy':
             base_col = None
@@ -1679,7 +1684,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 else:
                     main_str = str(safe_int(value))
 
-        # Текстовые маркеры (🟢/🔴 и ↑/↓)
+        # Маркеры
         markers = []
         if is_best:
             markers.append("🟢")
@@ -1704,8 +1709,8 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
             main_str = f"{' '.join(markers)} {main_str}"
         return main_str
 
-    # Подготовка данных
-    all_matches_data = []
+    # Сбор данных
+    all_rows = []  # (pos, data_dict)
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
         if not data:
@@ -1717,12 +1722,13 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
 
         df['pos_group'] = df['position'].apply(get_position_group)
         pos_metrics = {}
-        for pos in ['FW', 'AM', 'CM', 'FB', 'CB']:
+        for pos in position_order:
             metrics = [m for m, w in match_weights.get(pos, {}).items() if w != 0 and m in df.columns]
             pos_metrics[pos] = metrics
 
+        # Лучшие/худшие в команде по каждой позиции и метрике
         best_worst = {}
-        for pos in pos_metrics:
+        for pos in position_order:
             pos_df = df[df['pos_group'] == pos]
             if pos_df.empty:
                 continue
@@ -1733,7 +1739,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                     'min': pos_df[m].min()
                 }
 
-        for pos in pos_metrics:
+        for pos in position_order:
             pos_df = df[df['pos_group'] == pos]
             if pos_df.empty:
                 continue
@@ -1744,7 +1750,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 row_data = {
                     'match_label': opponent_label,
                     'player': player_name,
-                    'position_short': position_ru_short.get(pos, pos),
                     'minutes': minutes,
                 }
                 for m in pos_metrics[pos]:
@@ -1754,98 +1759,121 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                     league_avg_val = league_avg.get(m) if league_avg else None
                     season_val = season_vals.get(m) if season_vals else None
                     formatted = format_value(m, val, player_row, is_best, is_worst, season_val)
-                    # Сохраняем базовое значение, а также raw и avg для маркера лиги
                     row_data[m] = formatted
                     if league_avg_val is not None:
                         row_data[f'{m}_raw'] = val
                         row_data[f'{m}_avg'] = league_avg_val
-                all_matches_data.append((pos, row_data))
+                all_rows.append((pos, row_data))
 
-    if not all_matches_data:
+    if not all_rows:
         raise ValueError("Нет данных для экспорта")
 
+    # Группируем строки по позициям и игрокам для правильной сортировки
     pos_groups = defaultdict(list)
-    for pos, row in all_matches_data:
+    for pos, row in all_rows:
         pos_groups[pos].append(row)
 
+    # Определяем метрики для каждой позиции (первые несколько, чтобы заголовки были едиными? Но у разных позиций метрики разные.
+    # В итоговой таблице колонки должны быть едиными для всех? В образце все колонки одинаковы для всех позиций.
+    # Поэтому лучше взять объединение всех метрик, которые используются хотя бы в одной позиции.
+    all_metrics = set()
+    for pos in position_order:
+        metrics = [m for m, w in match_weights.get(pos, {}).items() if w != 0]
+        all_metrics.update(metrics)
+    all_metrics = sorted(list(all_metrics))  # сортируем для стабильности
+    # Заголовки (как в образце, плюс средние по лиге)
+    headers = ['Амплуа', 'Игрок', 'Игра', 'Мин'] + [MATCH_METRIC_NAMES_RU.get(m, m) for m in all_metrics]
+    if league_avg:
+        for i, m in enumerate(all_metrics):
+            if m in league_avg:
+                avg_val = league_avg[m]
+                if m.endswith('_pct') or m == 'pass_accuracy':
+                    headers[4+i] += f"\n(ср. {avg_val:.1f}%)"
+                else:
+                    headers[4+i] += f"\n(ср. {avg_val:.2f})"
+
+    # Формируем строки в порядке позиций и игроков
+    data_rows = []
+    for pos in position_order:
+        rows_list = pos_groups.get(pos, [])
+        if not rows_list:
+            continue
+        # Группируем по игрокам и сортируем матчи
+        player_matches = defaultdict(list)
+        for row in rows_list:
+            player_matches[row['player']].append(row)
+        for player in sorted(player_matches.keys()):
+            matches = sorted(player_matches[player], key=lambda x: x['match_label'])
+            for match in matches:
+                row = [position_ru_short[pos], match['player'], match['match_label'], match['minutes']]
+                for m in all_metrics:
+                    val = match.get(m, '')
+                    # Для маркера лиги (▲/▼) добавляем его перед значением
+                    raw_val = match.get(f'{m}_raw')
+                    avg_val = match.get(f'{m}_avg')
+                    marker = ""
+                    color = None
+                    if raw_val is not None and avg_val is not None:
+                        try:
+                            raw_f = float(raw_val)
+                            avg_f = float(avg_val)
+                            if m in NEGATIVE_METRICS:
+                                if raw_f < avg_f:
+                                    marker = "▲ "
+                                    color = "0000FF"
+                                elif raw_f > avg_f:
+                                    marker = "▼ "
+                                    color = "8B4513"
+                            else:
+                                if raw_f > avg_f:
+                                    marker = "▲ "
+                                    color = "0000FF"
+                                elif raw_f < avg_f:
+                                    marker = "▼ "
+                                    color = "8B4513"
+                        except:
+                            pass
+                    final_val = marker + val if marker else val
+                    row.append(final_val)
+                data_rows.append(row)
+
+    if not data_rows:
+        raise ValueError("Нет данных для экспорта")
+
+    # Создаём Excel
     with pd.ExcelWriter(output_bytes_io, engine='openpyxl') as writer:
-        for pos, rows_list in pos_groups.items():
-            metrics = [m for m, w in match_weights.get(pos, {}).items() if w != 0]
-            headers = ['Игрок', 'Игра', 'Мин'] + [MATCH_METRIC_NAMES_RU.get(m, m) for m in metrics]
-            if league_avg:
-                for i, m in enumerate(metrics):
-                    if m in league_avg:
-                        avg_val = league_avg[m]
-                        if m.endswith('_pct') or m == 'pass_accuracy':
-                            headers[3+i] += f"\n(ср. {avg_val:.1f}%)"
-                        else:
-                            headers[3+i] += f"\n(ср. {avg_val:.2f})"
-
-            player_matches = defaultdict(list)
-            for row in rows_list:
-                player_matches[row['player']].append(row)
-            sorted_players = sorted(player_matches.keys())
-
-            sheet_name = position_ru_long.get(pos, pos)
-            if sheet_name in writer.book.sheetnames:
-                std = writer.book[sheet_name]
-                writer.book.remove(std)
-            ws = writer.book.create_sheet(sheet_name)
-            # Заголовки
-            for col_idx, header in enumerate(headers, start=1):
-                cell = ws.cell(row=1, column=col_idx, value=header)
-                cell.font = Font(bold=True)
-                cell.alignment = Alignment(horizontal='center')
-            row_num = 2
-            for player in sorted_players:
-                matches = sorted(player_matches[player], key=lambda x: x['match_label'])
-                for match in matches:
-                    ws.cell(row=row_num, column=1, value=match['player'])
-                    ws.cell(row=row_num, column=2, value=match['match_label'])
-                    ws.cell(row=row_num, column=3, value=match['minutes'])
-                    for col_idx, m in enumerate(metrics, start=4):
-                        base_value = match.get(m, '')
-                        raw_val = match.get(f'{m}_raw')
-                        avg_val = match.get(f'{m}_avg')
-                        # Определяем маркер лиги и цвет
-                        marker = ""
-                        color = None
-                        if raw_val is not None and avg_val is not None:
-                            try:
-                                raw_f = float(raw_val)
-                                avg_f = float(avg_val)
-                                if m in NEGATIVE_METRICS:
-                                    if raw_f < avg_f:
-                                        marker = "▲ "
-                                        color = "0000FF"  # синий
-                                    elif raw_f > avg_f:
-                                        marker = "▼ "
-                                        color = "8B4513"  # коричневый
-                                else:
-                                    if raw_f > avg_f:
-                                        marker = "▲ "
-                                        color = "0000FF"
-                                    elif raw_f < avg_f:
-                                        marker = "▼ "
-                                        color = "8B4513"
-                            except:
-                                pass
-                        final_value = marker + base_value if marker else base_value
-                        cell = ws.cell(row=row_num, column=col_idx, value=final_value)
-                        if color:
-                            cell.font = Font(color=color)
-                    row_num += 1
-            # Автоширина
-            for col in ws.columns:
-                max_len = 0
-                col_letter = get_column_letter(col[0].column)
-                for cell in col:
-                    try:
-                        if len(str(cell.value)) > max_len:
-                            max_len = len(str(cell.value))
-                    except:
-                        pass
-                ws.column_dimensions[col_letter].width = min(max_len + 2, 30)
+        df_out = pd.DataFrame(data_rows, columns=headers)
+        df_out.to_excel(writer, sheet_name='Лист1', startrow=3, index=False)
+        workbook = writer.book
+        worksheet = workbook['Лист1']
+        # Шапка
+        worksheet['A1'] = f"{team_name} {season_year} RuStat Игроки"
+        worksheet['A2'] = "Показатели"
+        worksheet['A3'] = ""
+        # Стили шапки
+        for cell in ['A1', 'A2']:
+            worksheet[cell].font = Font(bold=True)
+            worksheet[cell].alignment = Alignment(horizontal='center')
+        # Применяем цвет шрифта для маркеров ▲/▼
+        # Проходим по всем ячейкам с данными (начиная с 4 строки)
+        for row in worksheet.iter_rows(min_row=4, max_row=worksheet.max_row):
+            for cell in row:
+                if cell.value and isinstance(cell.value, str):
+                    if '▲' in cell.value:
+                        cell.font = Font(color="0000FF")
+                    elif '▼' in cell.value:
+                        cell.font = Font(color="8B4513")
+        # Автоширина
+        for col in worksheet.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_len:
+                        max_len = len(str(cell.value))
+                except:
+                    pass
+            worksheet.column_dimensions[col_letter].width = min(max_len + 2, 40)
 
     st.success("Расширенный экспорт завершён")
 
