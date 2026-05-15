@@ -1606,7 +1606,10 @@ def get_average_series(radar_metrics, full_df):
 # -------------------- ЭКСПОРТ В ФОРМАТЕ RuStat (РАСШИРЕННЫЙ) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
     """
-    Экспорт матчевой статистики в формате RuStat (вертикальные заголовки, группировка по игрокам).
+    Экспорт матчевой статистики в формате RuStat:
+    - вертикальные заголовки (textRotation=255)
+    - закрепление столбцов A и B, строки 4 (freeze_panes = 'C5')
+    - группировка по игрокам (имя только в первой строке)
     """
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment
@@ -1742,16 +1745,17 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         cell = ws.cell(row=4, column=col_idx, value=header)
         cell.font = Font(name='Calibri', size=11, bold=True)
         cell.alignment = Alignment(horizontal='center', vertical='center', textRotation=255)  # вертикальный текст
-    ws.row_dimensions[4].height = 150
+    ws.row_dimensions[4].height = 150  # высота для вертикального текста
 
-    # Ширина колонок
-    col_widths = [10, 18, 15, 5, 8, 12, 8, 5, 6, 10, 10, 12, 12, 10, 10, 8, 12, 12, 10, 10, 8, 8, 12, 12, 12, 12]
+    # Ширина колонок (подобрана для вертикальных заголовков)
+    col_widths = [8, 18, 15, 5, 8, 12, 8, 5, 6, 10, 10, 12, 12, 10, 10, 8, 12, 12, 10, 10, 8, 8, 12, 12, 12, 12]
     for i, w in enumerate(col_widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
 
-    ws.freeze_panes = 'B5'
+    # Закрепление: строка 4 и столбцы A и B (C5 закрепит область A1:B4 и оставит видимыми при прокрутке)
+    ws.freeze_panes = 'C5'
 
-    # Заполнение
+    # Заполнение данных
     row_idx = 5
     for pos in position_order:
         rows_list = pos_groups.get(pos, [])
@@ -1862,7 +1866,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 cell.alignment = Alignment(horizontal='center', vertical='center')
 
     wb.save(output_bytes_io)
-    st.success("Экспорт завершён в соответствии с форматом RuStat")
+    st.success("Экспорт завершён (вертикальные заголовки, закреплены столбцы А и B)")
 
 # -------------------- ИНТЕРФЕЙС --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
