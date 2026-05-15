@@ -596,7 +596,6 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
     except (ValueError, TypeError):
         return str(value)
 
-    # Базовое значение
     main_str = f"{value:.2f}"
 
     if metric.endswith('_pct') or metric == 'pass_accuracy':
@@ -656,7 +655,7 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
             else:
                 main_str = f"{int(value)}" if value == int(value) else f"{value:.2f}"
 
-    # Добавляем стрелку сравнения с сезоном в скобках
+    # Стрелка сравнения с сезоном
     if player_season_val is not None and pd.notna(player_season_val):
         try:
             season_val = float(player_season_val)
@@ -674,26 +673,26 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
         except:
             pass
 
-    # Цветной кружок вместо фона (синий — лучше, коричневый — хуже)
+    # Кружок сравнения с лигой
     if league_avg is not None and pd.notna(league_avg):
         try:
             avg = float(league_avg)
             if not pd.isna(avg):
                 if metric in NEGATIVE_METRICS:
                     if value < avg:
-                        circle = '<span style="color: #4169E1; font-size: 14px;">●</span> '
+                        prefix = '<span style="color: #4169E1;">●</span> '
                     elif value > avg:
-                        circle = '<span style="color: #8B4513; font-size: 14px;">●</span> '
+                        prefix = '<span style="color: #8B4513;">●</span> '
                     else:
-                        circle = ''
+                        prefix = ''
                 else:
                     if value > avg:
-                        circle = '<span style="color: #4169E1; font-size: 14px;">●</span> '
+                        prefix = '<span style="color: #4169E1;">●</span> '
                     elif value < avg:
-                        circle = '<span style="color: #8B4513; font-size: 14px;">●</span> '
+                        prefix = '<span style="color: #8B4513;">●</span> '
                     else:
-                        circle = ''
-                return circle + main_str
+                        prefix = ''
+                return f'{prefix}{main_str}'
         except:
             pass
 
@@ -862,7 +861,7 @@ def build_match_main_table(df, selected_metrics, league_avg=None, player_season_
         main_data.append(row_data)
     return pd.DataFrame(main_data, columns=main_headers)
 
-# -------------------- ЗАГРУЗКА ИЗ БД --------------------
+# -------------------- ЗАГРУЗКА ИЗ БД (NULL → 0) --------------------
 def load_from_db(league_names, seasons, teams=None):
     conn = psycopg2.connect(**get_db_config())
     query = """
@@ -944,6 +943,9 @@ def load_from_db(league_names, seasons, teams=None):
             if df[col].max() <= 1.0:
                 df[col] = df[col] * 100
 
+    metric_cols = [col for col in df.columns if col not in ['player', 'position', 'minutes', 'team', 'league']]
+    df[metric_cols] = df[metric_cols].fillna(0)
+
     minutes = pd.to_numeric(df['minutes'], errors='coerce').fillna(0)
     stats_to_norm = [
         'goals', 'assists', 'shots', 'shots_on_target',
@@ -983,11 +985,9 @@ def load_from_db(league_names, seasons, teams=None):
     return df
 
 def get_league_averages(league_name, season):
-    """Возвращает словарь средних абсолютных значений по лиге и сезону (без p90)."""
     df = load_from_db([league_name], [season])
     if df.empty:
         return {}
-    # Вычисляем средние для абсолютных метрик (MATCH_ALL_METRICS)
     avg = {}
     for m in MATCH_ALL_METRICS:
         if m in df.columns:
@@ -995,11 +995,9 @@ def get_league_averages(league_name, season):
     return avg
 
 def get_player_season_stats_df(league_name, season):
-    """Возвращает DataFrame с сезонной статистикой игроков."""
     df = load_from_db([league_name], [season])
     if df.empty:
         return pd.DataFrame()
-    # Оставляем абсолютные метрики (MATCH_ALL_METRICS) и player, position
     cols = ['player'] + [m for m in MATCH_ALL_METRICS if m in df.columns]
     return df[cols]
 
@@ -1436,6 +1434,9 @@ def load_match_stats(match_id, team_ids=None):
             if df[col].max() <= 1.0:
                 df[col] = df[col] * 100
 
+    metric_cols = [col for col in df.columns if col not in ['player', 'position', 'minutes', 'team']]
+    df[metric_cols] = df[metric_cols].fillna(0)
+
     return df
 
 # -------------------- ВИЗУАЛИЗАЦИЯ (Plotly) --------------------
@@ -1742,10 +1743,8 @@ with st.sidebar:
                 st.subheader("📊 Сравнение с лигой")
                 comp_league = st.selectbox("Лига для сравнения", all_leagues, index=all_leagues.index(match_league_analysis) if match_league_analysis in all_leagues else 0, key="comp_league")
                 seasons_for_comp = get_seasons_for_leagues([comp_league])
-                # Определяем сезон по умолчанию (первый доступный)
                 default_season_idx = 0
                 if seasons_for_comp:
-                    # Попробуем найти тот же сезон, что у первого выбранного матча
                     first_match_info = matches_in_league[0] if matches_in_league else None
                     if first_match_info:
                         try:
@@ -1790,14 +1789,12 @@ with st.sidebar:
                                 }
                         if new_matches:
                             st.session_state.df_matches = new_matches
-                            # Загружаем средние по лиге для сравнения
                             league_avg = get_league_averages(comp_league, comp_season)
                             player_season_df = get_player_season_stats_df(comp_league, comp_season)
                             player_season_map = {}
                             if not player_season_df.empty:
                                 for _, row in player_season_df.iterrows():
                                     player_season_map[row['player']] = row.to_dict()
-                            # Строим таблицы для каждого матча с учётом сравнения
                             st.session_state.match_tables = {}
                             for mid, data in new_matches.items():
                                 df = data['df']
@@ -1939,7 +1936,6 @@ with tab_season:
         st.info("Загрузите сезонные данные (в боковой панели)")
 
 with tab_match:
-    # Применяем CSS для уменьшения шрифта в таблицах матча
     st.markdown("""
     <style>
     .match-table table {
@@ -1964,11 +1960,9 @@ with tab_match:
 
         if active_match_id is not None:
             df_active = st.session_state.df_matches[active_match_id]['df']
-            # Используем сохранённые таблицы с сравнением, если есть
             if 'match_tables' in st.session_state and active_match_id in st.session_state.match_tables:
                 position_tables_active = st.session_state.match_tables[active_match_id]
             else:
-                # Запасной вариант без сравнения
                 position_tables_active = build_match_position_tables(df_active, DEFAULT_MATCH_WEIGHTS)
 
             all_metrics = [m for m in MATCH_ALL_METRICS if m in df_active.columns]
@@ -1987,14 +1981,23 @@ with tab_match:
 
             subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
 
+            # Легенда
+            st.markdown("""
+            <div style="font-size:13px; margin-bottom:8px; line-height:1.6;">
+            <b>Обозначения:</b><br>
+            🟢 – лучший в команде &nbsp;&nbsp; 🔴 – худший в команде<br>
+            <span style="color:#4169E1;">●</span> – выше среднего по лиге &nbsp;&nbsp; 
+            <span style="color:#8B4513;">●</span> – ниже среднего по лиге<br>
+            (↑) – в матче лучше своего среднего за сезон &nbsp;&nbsp; (↓) – хуже своего среднего
+            </div>
+            """, unsafe_allow_html=True)
+
             with subtabs[0]:
-                # Используем сравнение с лигой для общей таблицы
                 league_avg = st.session_state.get('league_avg')
                 player_season_map = st.session_state.get('player_season_map')
                 df_main = build_match_main_table(df_active, selected_metrics,
                                                 league_avg=league_avg,
                                                 player_season_map=player_season_map)
-                # Рендерим как HTML для поддержки стилей
                 st.write(f'<div class="match-table">{df_main.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
 
             for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
