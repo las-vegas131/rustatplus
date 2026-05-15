@@ -1606,17 +1606,17 @@ def get_average_series(radar_metrics, full_df):
 # -------------------- ЭКСПОРТ В ФОРМАТЕ RuStat (РАСШИРЕННЫЙ) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
     """
-    Экспорт матчевой статистики в формате RuStat с вертикальными заголовками.
+    Экспорт матчевой статистики в формате RuStat.
+    Заголовки – вертикальные (textRotation=255).
+    Закрепление: строка заголовков и столбцы Амплуа/Игрок.
     """
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment
     from openpyxl.utils import get_column_letter
     from collections import defaultdict
 
-    position_ru = {
-        'CB': 'ЦЗ', 'FB': 'КЗ', 'CM': 'НОП', 'CDM': 'НОП',
-        'AM': 'ВОП', 'CAM': 'ВОП', 'CF': 'НАП', 'FW': 'НАП', 'ST': 'НАП'
-    }
+    position_ru = {'CB': 'ЦЗ', 'FB': 'КЗ', 'CM': 'НОП', 'CDM': 'НОП',
+                   'AM': 'ВОП', 'CAM': 'ВОП', 'CF': 'НАП', 'FW': 'НАП', 'ST': 'НАП'}
     position_order = ['CB', 'FB', 'CM', 'AM', 'FW']
 
     def safe_int(val):
@@ -1635,7 +1635,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         succ = int(round(t * acc / 100))
         return f"{t}/{succ}"
 
-    # Сбор данных (как и раньше)
+    # Сбор данных (без изменений)
     all_rows = []
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
@@ -1668,8 +1668,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 player_name = player_row['player']
                 minutes = safe_int(player_row.get('minutes', 0))
                 season_vals = player_season_map.get(player_name, {}) if player_season_map else {}
-                is_best = {}
-                is_worst = {}
+                is_best, is_worst = {}, {}
                 for m in best_worst.get(pos, {}):
                     val = player_row[m]
                     maxv, minv = best_worst[pos][m]['max'], best_worst[pos][m]['min']
@@ -1725,7 +1724,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         ws[cell].font = Font(name='Calibri', size=11, bold=True)
         ws[cell].alignment = Alignment(horizontal='center')
 
-    # Заголовки (вертикальные через перенос текста и узкую ширину)
+    # Заголовки (вертикальные)
     headers = [
         'Амплуа', 'Игрок', 'Игра', 'Мин',
         'ТТД/уд', 'ТТД у чужих ворот/уд', 'Удары/в створ',
@@ -1737,22 +1736,23 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         'Перехваты/на чужой половине', 'Подборы/на чужой половине',
         'Потери/на своей половине', 'Возвраты/на чужо половине'
     ]
-    # Устанавливаем очень узкую ширину для всех колонок, кроме первых трёх
+    # Устанавливаем вертикальное направление текста
     for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=4, column=col_idx, value=header)
         cell.font = Font(name='Calibri', size=11, bold=True)
-        # Для вертикального текста используем перенос строк и центрирование
-        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-        # Ширина колонки: для первых трёх – шире, для остальных – 5 (чтобы текст переносился)
+        # Вертикальный текст (сверху вниз)
+        cell.alignment = Alignment(horizontal='center', vertical='center', textRotation=255, wrapText=False)
+        # Ширина колонок: для первых трёх – 15, для остальных – 6
         if col_idx <= 3:
             ws.column_dimensions[get_column_letter(col_idx)].width = 15
         else:
             ws.column_dimensions[get_column_letter(col_idx)].width = 6
     ws.row_dimensions[4].height = 120  # высота строки заголовков
 
+    # Закрепление: строка 4 и столбец A
     ws.freeze_panes = 'B5'
 
-    # Заполнение данных (код такой же, как ранее)
+    # Заполнение данных
     row_idx = 5
     for pos in position_order:
         rows_list = pos_groups.get(pos, [])
@@ -1863,7 +1863,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 cell.alignment = Alignment(horizontal='center', vertical='center')
 
     wb.save(output_bytes_io)
-    st.success("Экспорт завершён с вертикальными заголовками")
+    st.success("Экспорт завершён: вертикальные заголовки, закрепление строк и столбцов")
 
 # -------------------- ИНТЕРФЕЙС --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
