@@ -1606,10 +1606,10 @@ def get_average_series(radar_metrics, full_df):
 # -------------------- ЭКСПОРТ В ФОРМАТЕ RuStat (РАСШИРЕННЫЙ) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
     """
-    Расширенный экспорт матчей в Excel с группировкой по позициям и цветовой заливкой фона
-    (синий – выше среднего по лиге, коричневый – ниже).
+    Расширенный экспорт матчей в Excel с группировкой по позициям.
+    Цветные текстовые маркеры: ▲ (синий) – выше среднего по лиге, ▼ (коричневый) – ниже.
     """
-    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.styles import Font, Alignment
     from openpyxl.utils import get_column_letter
     from collections import defaultdict
 
@@ -1679,7 +1679,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 else:
                     main_str = str(safe_int(value))
 
-        # Текстовые маркеры (без кружков)
+        # Текстовые маркеры (🟢/🔴 и ↑/↓)
         markers = []
         if is_best:
             markers.append("🟢")
@@ -1754,6 +1754,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                     league_avg_val = league_avg.get(m) if league_avg else None
                     season_val = season_vals.get(m) if season_vals else None
                     formatted = format_value(m, val, player_row, is_best, is_worst, season_val)
+                    # Сохраняем базовое значение, а также raw и avg для маркера лиги
                     row_data[m] = formatted
                     if league_avg_val is not None:
                         row_data[f'{m}_raw'] = val
@@ -1790,6 +1791,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 std = writer.book[sheet_name]
                 writer.book.remove(std)
             ws = writer.book.create_sheet(sheet_name)
+            # Заголовки
             for col_idx, header in enumerate(headers, start=1):
                 cell = ws.cell(row=1, column=col_idx, value=header)
                 cell.font = Font(bold=True)
@@ -1802,27 +1804,38 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                     ws.cell(row=row_num, column=2, value=match['match_label'])
                     ws.cell(row=row_num, column=3, value=match['minutes'])
                     for col_idx, m in enumerate(metrics, start=4):
-                        formatted_value = match.get(m, '')
-                        cell = ws.cell(row=row_num, column=col_idx, value=formatted_value)
+                        base_value = match.get(m, '')
                         raw_val = match.get(f'{m}_raw')
                         avg_val = match.get(f'{m}_avg')
+                        # Определяем маркер лиги и цвет
+                        marker = ""
+                        color = None
                         if raw_val is not None and avg_val is not None:
                             try:
                                 raw_f = float(raw_val)
                                 avg_f = float(avg_val)
                                 if m in NEGATIVE_METRICS:
                                     if raw_f < avg_f:
-                                        cell.fill = PatternFill(start_color="9DC3E6", end_color="9DC3E6", fill_type="solid")
+                                        marker = "▲ "
+                                        color = "0000FF"  # синий
                                     elif raw_f > avg_f:
-                                        cell.fill = PatternFill(start_color="E6B89D", end_color="E6B89D", fill_type="solid")
+                                        marker = "▼ "
+                                        color = "8B4513"  # коричневый
                                 else:
                                     if raw_f > avg_f:
-                                        cell.fill = PatternFill(start_color="9DC3E6", end_color="9DC3E6", fill_type="solid")
+                                        marker = "▲ "
+                                        color = "0000FF"
                                     elif raw_f < avg_f:
-                                        cell.fill = PatternFill(start_color="E6B89D", end_color="E6B89D", fill_type="solid")
+                                        marker = "▼ "
+                                        color = "8B4513"
                             except:
                                 pass
+                        final_value = marker + base_value if marker else base_value
+                        cell = ws.cell(row=row_num, column=col_idx, value=final_value)
+                        if color:
+                            cell.font = Font(color=color)
                     row_num += 1
+            # Автоширина
             for col in ws.columns:
                 max_len = 0
                 col_letter = get_column_letter(col[0].column)
