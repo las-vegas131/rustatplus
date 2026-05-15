@@ -596,7 +596,9 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
     except (ValueError, TypeError):
         return str(value)
 
-    # Основное значение
+    # Базовое значение на случай, если ни одна ветвь не сработает
+    main_str = f"{value:.2f}"
+
     if metric.endswith('_pct') or metric == 'pass_accuracy':
         base_col = None
         if metric == 'pass_accuracy': base_col = 'passes'
