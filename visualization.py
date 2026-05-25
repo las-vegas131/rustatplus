@@ -5,8 +5,11 @@ import plotly.graph_objects as go
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
+from openpyxl.drawing.image import Image
 from collections import defaultdict
 import streamlit as st
+import tempfile
+import os
 
 from config import NEGATIVE_METRICS, METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU
 from calculations import get_position_group, percentile_normalize, format_match_metric
@@ -147,11 +150,6 @@ def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values
 
 # -------------------- Экспорт в Excel (формат RuStat) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
-    """
-    Экспорт матчевой статистики в формате RuStat.
-    Заголовки – вертикальные (textRotation=255).
-    Закрепление: строка заголовков и столбцы Амплуа/Игрок.
-    """
     position_ru = {'CB': 'ЦЗ', 'FB': 'КЗ', 'CM': 'НОП', 'CDM': 'НОП',
                    'AM': 'ВОП', 'CAM': 'ВОП', 'CF': 'НАП', 'FW': 'НАП', 'ST': 'НАП'}
     position_order = ['CB', 'FB', 'CM', 'AM', 'FW']
@@ -172,7 +170,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         succ = int(round(t * acc / 100))
         return f"{t}/{succ}"
 
-    # Сбор данных (аналогично предыдущей версии)
+    # Сбор данных
     all_rows = []
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
@@ -340,7 +338,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                             pass
                     return (marker + base if marker else base), color
 
-                # ТТД/уд
                 ttd_val = f"{match['ttd_total']}/{match['ttd_succ']}" if match['ttd_total'] > 0 else ''
                 final, col = format_cell(ttd_val, match['ttd_raw'], league_avg.get('actions') if league_avg else None,
                                          'actions', match['is_best'].get('actions', False), match['is_worst'].get('actions', False),
@@ -349,7 +346,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 if col:
                     cell.font = Font(color=col, name='Calibri', size=11)
 
-                # ТТД у чужих ворот
                 ttd_opp_val = f"{match['ttd_opp_total']}/{match['ttd_opp_succ']}" if match['ttd_opp_total'] > 0 else ''
                 final, col = format_cell(ttd_opp_val, match['ttd_opp_raw'], league_avg.get('actions_opp_box') if league_avg else None,
                                          'actions_opp_box', match['is_best'].get('actions_opp_box', False), match['is_worst'].get('actions_opp_box', False),
@@ -358,14 +354,13 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 if col:
                     cell.font = Font(color=col, name='Calibri', size=11)
 
-                # Остальные поля
                 ws.cell(row=row_idx, column=7, value=f"{match['shots_target']}/{match['shots_total']}" if match['shots_total'] > 0 else '')
                 ws.cell(row=row_idx, column=8, value=match['fouls'] if match['fouls'] > 0 else '')
                 ws.cell(row=row_idx, column=9, value=match['fouls_suffered'] if match['fouls_suffered'] > 0 else '')
                 ws.cell(row=row_idx, column=10, value=frac(match['passes_total'], match['passes_acc']))
                 ws.cell(row=row_idx, column=11, value=frac(match['prog_total'], match['prog_acc']))
                 ws.cell(row=row_idx, column=12, value=frac(match['ft_total'], match['ft_acc']))
-                ws.cell(row=row_idx, column=13, value=frac(match['ft_total'], match['ft_acc']))  # дубль
+                ws.cell(row=row_idx, column=13, value=frac(match['ft_total'], match['ft_acc']))
                 ws.cell(row=row_idx, column=14, value=frac(match['pen_total'], match['pen_acc']))
                 ws.cell(row=row_idx, column=15, value=match['key_passes'] if match['key_passes'] > 0 else '')
                 ws.cell(row=row_idx, column=16, value=frac(match['crosses_total'], match['crosses_acc']))
@@ -383,7 +378,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 row_idx += 1
                 first_match = False
 
-    # Выравнивание
     for row in ws.iter_rows(min_row=1, max_row=row_idx-1, min_col=1, max_col=26):
         for cell in row:
             if cell.column in [1, 2, 3]:
@@ -391,7 +385,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
             else:
                 cell.alignment = Alignment(horizontal='center', vertical='center')
 
-    # Автоширина
     for col in ws.columns:
         max_len = 0
         col_letter = get_column_letter(col[0].column)
@@ -402,6 +395,48 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
             except:
                 pass
         ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
+
+    # Добавляем лист с диаграммами
+    if selected_match_ids:
+        try:
+            import plotly.io as pio
+            pio.kaleido.scope.default_format = "png"
+            chart_sheet = wb.create_sheet("Диаграммы")
+            chart_sheet.column_dimensions['A'].width = 50
+            chart_sheet.row_dimensions[1].height = 30
+            chart_sheet['A1'] = "Диаграммы игроков по выбранным матчам"
+            chart_sheet['A1'].font = Font(bold=True, size=14)
+            current_row = 3
+            for match_id in selected_match_ids:
+                data = matches_dict.get(match_id)
+                if not data:
+                    continue
+                df_match = data['df']
+                if df_match.empty:
+                    continue
+                chart_sheet.cell(row=current_row, column=1, value=f"Матч: {data['label']}")
+                chart_sheet.cell(row=current_row, column=1).font = Font(bold=True, size=12)
+                current_row += 1
+                for _, player_row in df_match.iterrows():
+                    try:
+                        fig = create_player_radar_figure(player_row, df_match, st.session_state.match_settings, avg_values=league_avg)
+                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
+                            fig.write_image(tmpfile.name, width=600, height=600, scale=2)
+                            tmp_path = tmpfile.name
+                        img = Image(tmp_path)
+                        img.width = 400
+                        img.height = 400
+                        cell = chart_sheet.cell(row=current_row, column=1, value=player_row['player'])
+                        cell.font = Font(bold=True)
+                        chart_sheet.add_image(img, f'B{current_row}')
+                        current_row += 1
+                        os.unlink(tmp_path)
+                    except Exception as e:
+                        st.warning(f"Не удалось создать диаграмму для {player_row['player']}: {e}")
+                        continue
+                current_row += 1
+        except Exception as e:
+            st.warning(f"Не удалось добавить лист с диаграммами: {e}")
 
     wb.save(output_bytes_io)
     st.success("Экспорт завершён")
