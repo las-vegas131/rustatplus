@@ -1,10 +1,8 @@
 import os
 import pickle
 import pandas as pd
-import numpy as np
 
 def safe_int(val):
-    """Безопасное преобразование в int, возвращает 0 при None/NaN"""
     if pd.isna(val) or val is None:
         return 0
     try:
@@ -13,7 +11,6 @@ def safe_int(val):
         return 0
 
 def frac(total, accuracy_pct):
-    """Форматирует дробь total/успешные на основе точности в процентах."""
     t = safe_int(total)
     if t == 0:
         return ''
@@ -22,7 +19,6 @@ def frac(total, accuracy_pct):
     return f"{t}/{succ}"
 
 def clean_value(v):
-    """Очистка значения при импорте из Excel."""
     if pd.isna(v) or str(v).strip() in ('', '-'):
         return None
     try:
