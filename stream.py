@@ -30,7 +30,7 @@ from calculations import (
 )
 from visualization import (
     create_player_radar_figure, create_compare_figure, create_position_radar,
-    export_matches_advanced, export_match_standard_with_charts
+    export_matches_advanced, export_match_standard_position_tables
 )
 
 st.set_page_config(page_title="InStat Analyst", layout="wide")
