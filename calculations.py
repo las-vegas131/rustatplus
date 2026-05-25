@@ -1,7 +1,7 @@
+# calculations.py
 import pandas as pd
 import numpy as np
-from config import NEGATIVE_METRICS, METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU, MIN_MINUTES
-from utils import safe_int
+from config import NEGATIVE_METRICS, METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU
 
 def get_position_group(pos):
     if not isinstance(pos, str):
@@ -18,7 +18,6 @@ def percentile_normalize(series):
     return series.fillna(0).rank(pct=True)
 
 def format_metric_with_detail(metric, value, player_row):
-    # ТТД-метрики (сезонные)
     if metric == 'ttd_actions_p90':
         total = player_row.get('actions', 0)
         successful = player_row.get('actions_successful', 0)
@@ -59,7 +58,7 @@ def format_metric_with_detail(metric, value, player_row):
         return f"{value:.2f}"
 
 def format_match_metric(metric, value, player_row, league_avg=None, player_season_val=None):
-    # ТТД-метрики для матчей
+    # Обработка ТТД метрик для матчей (они не в MATCH_ALL_METRICS, но могут быть добавлены)
     if metric == 'ttd_actions':
         total = player_row.get('actions', 0)
         succ = player_row.get('actions_successful', 0)
@@ -159,7 +158,7 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
         except:
             pass
 
-    # Цветные эмодзи
+    # Цветные эмодзи для сравнения с лигой (только для числовых метрик)
     if metric not in ['ttd_actions', 'ttd_opp_actions'] and league_avg is not None and pd.notna(league_avg):
         try:
             avg = float(league_avg)
@@ -331,7 +330,6 @@ def build_position_tables(df, position_weights):
     return tables
 
 def build_main_table(df, selected_metrics):
-    # Обязательные ТТД-метрики
     mandatory_metrics = ['ttd_actions_p90', 'ttd_opp_actions_p90']
     metrics = [m for m in selected_metrics if m in df.columns]
     for m in mandatory_metrics:
@@ -379,7 +377,7 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
             tables[pos] = ([], [])
             continue
         metrics = [m for m, w in position_weights.get(pos, {}).items() if w != 0 and m in df.columns]
-        # Добавляем обязательные ТТД, если есть соответствующие поля
+        # Добавляем ТТД метрики, если есть соответствующие поля
         if 'actions' in df.columns and 'actions_successful' in df.columns:
             if 'ttd_actions' not in metrics:
                 metrics.append('ttd_actions')
