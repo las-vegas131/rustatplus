@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import io
@@ -27,8 +28,7 @@ from calculations import (
     get_position_group
 )
 from visualization import (
-    create_player_radar_figure, create_compare_figure, create_position_radar,
-    export_matches_advanced
+    create_player_radar_figure, export_matches_advanced
 )
 
 st.set_page_config(page_title="InStat Analyst", layout="wide")
@@ -81,8 +81,225 @@ if 'avg_league' not in st.session_state:
 if 'avg_season' not in st.session_state:
     st.session_state.avg_season = None
 
-# Боковая панель (импорт, загрузка и т.д.) – без изменений, как в предыдущей версии
-# ... (весь код sidebar остаётся как в последней рабочей версии)
+# Боковая панель (импорт, загрузка данных)
+with st.sidebar:
+    st.header("📤 Импорт Excel")
+    uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
+    if uploaded_file:
+        import_type = st.radio("Тип данных", ["Сезон", "Матч"], key="import_type")
+        if import_type == "Сезон":
+            existing_leagues = get_leagues()
+            if not existing_leagues:
+                st.error("Нет доступных лиг в БД.")
+            else:
+                import_league = st.selectbox("Лига", existing_leagues, key="season_league_select")
+                import_season = st.text_input("Сезон (например, 2024/2025)", key="import_season")
+                if st.button("Загрузить сезон в БД", use_container_width=True):
+                    if not import_season.strip():
+                        st.error("Введите название сезона")
+                    else:
+                        with st.spinner("Импорт сезона..."):
+                            cnt = import_season_excel(uploaded_file.getvalue(), import_league.strip(), import_season.strip())
+                            if cnt:
+                                st.success(f"Импортировано {cnt} игроков")
+                            else:
+                                st.error("Импорт не удался")
+        else:
+            existing_leagues = get_leagues()
+            if not existing_leagues:
+                st.error("Нет доступных лиг в БД.")
+            else:
+                match_league = st.selectbox("Лига", existing_leagues, key="match_league_select")
+                seasons_in_league = get_seasons_for_leagues([match_league])
+                if not seasons_in_league:
+                    st.warning("В выбранной лиге нет сезонов.")
+                    match_season = None
+                else:
+                    match_season = st.selectbox("Сезон", seasons_in_league, key="match_season_select")
+                teams_in_league = get_teams_for_league(match_league)
+                if not teams_in_league:
+                    st.error("В выбранной лиге нет команд.")
+                else:
+                    home_team = st.selectbox("Домашняя команда", teams_in_league, key="home_team_select")
+                    away_team = st.selectbox("Гостевая команда", teams_in_league, key="away_team_select")
+                    team_to_load = st.radio("Какую команду загружаем?", ["Только хозяев", "Только гостей"], key="match_team_load")
+                    match_date = st.date_input("Дата матча", value=None, key="match_date")
+                    match_label = st.text_input("Метка матча (необязательно)", key="match_label")
+                    if st.button("Загрузить матч в БД", use_container_width=True):
+                        if not match_season:
+                            st.error("Сезон не выбран")
+                        else:
+                            with st.spinner("Импорт матча..."):
+                                team_arg = 'home' if team_to_load == "Только хозяев" else 'away'
+                                try:
+                                    mid = import_match_excel(uploaded_file.getvalue(), match_league.strip(), match_season.strip(),
+                                                            home_team.strip(), away_team.strip(),
+                                                            match_date, match_label.strip() if match_label else None,
+                                                            which_team=team_arg)
+                                    if mid:
+                                        st.success(f"Матч #{mid} загружен")
+                                    else:
+                                        st.error("Не удалось импортировать матч")
+                                except Exception as e:
+                                    st.error(f"Ошибка импорта матча: {e}")
+
+    st.header("📊 Сезонная статистика")
+    leagues_list = get_leagues()
+    if not leagues_list:
+        st.warning("Нет лиг в базе")
+        selected_leagues = []
+    else:
+        selected_leagues = st.multiselect("Лиги", leagues_list, key="league_db")
+    if selected_leagues:
+        seasons_list = get_seasons_for_leagues(selected_leagues)
+        if not seasons_list:
+            st.warning("Нет сезонов")
+            selected_seasons = []
+        else:
+            selected_seasons = st.multiselect("Сезоны", seasons_list, key="season_db")
+    else:
+        selected_seasons = []
+    if selected_leagues and selected_seasons:
+        teams_list = get_teams_for_leagues_seasons(selected_leagues, selected_seasons)
+        if teams_list:
+            selected_teams = st.multiselect("Команды", teams_list, key="teams_db")
+        else:
+            selected_teams = []
+    else:
+        selected_teams = []
+    if selected_leagues and selected_seasons:
+        if st.button("Загрузить сезонные данные", use_container_width=True):
+            with st.spinner("Запрос..."):
+                teams_param = None if len(selected_teams) == 0 else selected_teams
+                df_raw = load_from_db(selected_leagues, selected_seasons, teams_param)
+                df_filtered = df_raw[df_raw['minutes'] >= MIN_MINUTES].copy()
+                if len(df_filtered) == 0:
+                    st.error("Нет игроков с достаточным временем")
+                else:
+                    df_filtered = calculate_ratings(df_filtered, st.session_state.current_settings)
+                    df_filtered = df_filtered.sort_values('rating', ascending=False).reset_index(drop=True)
+                    st.session_state.df_db = df_filtered
+                    st.session_state.position_tables = build_position_tables(df_filtered, st.session_state.current_settings)
+                    st.success(f"Загружено {len(df_filtered)} игроков")
+    else:
+        st.info("Выберите лигу и сезон")
+
+    st.header("⚽ Матчевая статистика")
+    all_leagues = get_leagues()
+    if not all_leagues:
+        st.warning("Нет лиг в базе")
+    else:
+        match_league_analysis = st.selectbox("Лига", all_leagues, key="match_analysis_league")
+        matches_in_league = get_matches_for_league(match_league_analysis)
+        if not matches_in_league:
+            st.info("Нет матчей в выбранной лиге")
+        else:
+            match_options = [f"#{m[0]} {m[1]} ({m[3]}) {m[4]} vs {m[5]}" for m in matches_in_league]
+            selected_matches_labels = st.multiselect("Выберите матчи", match_options, key="match_multiselect")
+            if selected_matches_labels:
+                teams_in_league = get_teams_for_league(match_league_analysis)
+                team_choice = st.radio("Команда", ["Обе", "Хозяева", "Гости"], key="match_team_choice")
+                st.subheader("📊 Сравнение с лигой")
+                comp_league = st.selectbox("Лига для сравнения", all_leagues,
+                                           index=all_leagues.index(match_league_analysis) if match_league_analysis in all_leagues else 0,
+                                           key="comp_league")
+                seasons_for_comp = get_seasons_for_leagues([comp_league])
+                default_season_idx = 0
+                if seasons_for_comp:
+                    first_match_info = matches_in_league[0] if matches_in_league else None
+                    if first_match_info:
+                        try:
+                            default_season_idx = seasons_for_comp.index(first_match_info[3])
+                        except:
+                            pass
+                comp_season = st.selectbox("Сезон для сравнения", seasons_for_comp, index=default_season_idx, key="comp_season")
+                if st.button("Загрузить матчи", use_container_width=True):
+                    with st.spinner("Загрузка матчей..."):
+                        new_matches = {}
+                        for label in selected_matches_labels:
+                            match_id = int(label.split()[0][1:])
+                            match_info = next(m for m in matches_in_league if m[0] == match_id)
+                            home_team = match_info[4]
+                            away_team = match_info[5]
+                            team_ids = None
+                            if team_choice == "Хозяева":
+                                conn = psycopg2.connect(**get_db_config())
+                                cur = conn.cursor()
+                                cur.execute("SELECT id FROM teams WHERE name = %s", (home_team,))
+                                tid = cur.fetchone()
+                                if tid: team_ids = [tid[0]]
+                                cur.close()
+                                conn.close()
+                            elif team_choice == "Гости":
+                                conn = psycopg2.connect(**get_db_config())
+                                cur = conn.cursor()
+                                cur.execute("SELECT id FROM teams WHERE name = %s", (away_team,))
+                                tid = cur.fetchone()
+                                if tid: team_ids = [tid[0]]
+                                cur.close()
+                                conn.close()
+                            df_match = load_match_stats(match_id, team_ids)
+                            if not df_match.empty:
+                                df_match['league'] = 'match'
+                                df_match = calculate_match_ratings(df_match, st.session_state.match_settings)
+                                df_match = df_match.sort_values('rating', ascending=False).reset_index(drop=True)
+                                new_matches[match_id] = {'df': df_match, 'label': label}
+                        if new_matches:
+                            st.session_state.df_matches = new_matches
+                            league_avg = get_league_averages(comp_league, comp_season)
+                            player_season_df = get_player_season_stats_df(comp_league, comp_season)
+                            player_season_map = {}
+                            if not player_season_df.empty:
+                                for _, row in player_season_df.iterrows():
+                                    player_dict = {}
+                                    for m in MATCH_ALL_METRICS:
+                                        p90_col = f'{m}_p90'
+                                        if p90_col in row:
+                                            player_dict[m] = row[p90_col]
+                                    player_season_map[row['player']] = player_dict
+                            st.session_state.match_tables = {}
+                            for mid, data in new_matches.items():
+                                df = data['df']
+                                pos_tables = build_match_position_tables(df, st.session_state.match_settings,
+                                                                          league_avg=league_avg,
+                                                                          player_season_map=player_season_map)
+                                st.session_state.match_tables[mid] = pos_tables
+                            st.session_state.league_avg = league_avg
+                            st.session_state.player_season_map = player_season_map
+                            st.success(f"Загружено {len(new_matches)} матчей")
+                        else:
+                            st.warning("Нет данных по выбранным матчам")
+
+    # Настройки весов
+    st.header("⚙️ Веса")
+    if st.button("Редактор весов (сезон)", use_container_width=True):
+        st.session_state.show_weights_editor = True
+    if st.button("Редактор весов (матч)", use_container_width=True):
+        st.session_state.show_match_weights_editor = True
+    if st.button("Сбросить все веса", use_container_width=True):
+        st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
+        st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
+        save_settings(st.session_state.current_settings, SETTINGS_FILE)
+        st.cache_data.clear()
+        st.success("Веса сброшены")
+        if st.session_state.df_db is not None:
+            st.session_state.df_db = calculate_ratings(st.session_state.df_db, st.session_state.current_settings)
+            st.session_state.position_tables = build_position_tables(st.session_state.df_db, st.session_state.current_settings)
+        for mid, data in st.session_state.df_matches.items():
+            data['df'] = calculate_match_ratings(data['df'], st.session_state.match_settings)
+
+    st.header("📊 Средние")
+    avg_source = st.radio("Источник", ["Текущие данные", "Лига из БД"], key="avg_source")
+    if avg_source == "Лига из БД":
+        avg_league = st.selectbox("Лига для средних", get_leagues(), key="avg_league")
+        if avg_league:
+            avg_seasons = get_seasons_for_leagues([avg_league])
+            avg_season = st.selectbox("Сезон", avg_seasons, key="avg_season") if avg_seasons else None
+        else:
+            avg_season = None
+    else:
+        avg_league = None
+        avg_season = None
 
 # Основные вкладки
 tab_season, tab_match = st.tabs(["📈 Сезон", "⚽ Матч"])
@@ -92,13 +309,10 @@ with tab_season:
         df_active = st.session_state.df_db
         position_tables_active = st.session_state.position_tables
         all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
-        # Обязательные ТТД метрики
         mandatory_metrics = ['ttd_actions_p90', 'ttd_opp_actions_p90']
         selectable_metrics = [m for m in all_metrics if m not in mandatory_metrics]
         metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in selectable_metrics}
-        
         with st.expander("Настройка колонок общей таблицы"):
-            # Восстанавливаем сохранённые (без обязательных)
             saved = st.session_state.selected_main_metrics if st.session_state.selected_main_metrics else []
             default_selected = [m for m in saved if m in selectable_metrics]
             selected_optional = st.multiselect(
@@ -114,7 +328,6 @@ with tab_season:
                 save_selected_metrics(selected_optional, SELECTED_METRICS_FILE)
         if not selected_metrics:
             selected_metrics = mandatory_metrics + all_metrics[:3]
-
         subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
         with subtabs[0]:
             df_main = build_main_table(df_active, selected_metrics)
@@ -149,9 +362,8 @@ with tab_season:
                     numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
                     df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
                     st.dataframe(df_pos, height=400, use_container_width=True, on_select="rerun", selection_mode="single-row", key=f"table_{pos}")
-                    state_key = f"table_{pos}"
-                    if state_key in st.session_state and st.session_state[state_key].selection.rows:
-                        idx = next(iter(st.session_state[state_key].selection.rows))
+                    if f"table_{pos}" in st.session_state and st.session_state[f"table_{pos}"].selection.rows:
+                        idx = next(iter(st.session_state[f"table_{pos}"].selection.rows))
                         if idx < len(rows):
                             player_name = rows[idx][0]
                             player_min = int(rows[idx][1])
@@ -228,7 +440,6 @@ with tab_match:
             else:
                 position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings)
             all_metrics = [m for m in MATCH_ALL_METRICS if m in df_active.columns]
-            # Добавляем ТТД-метрики в список доступных, если они есть
             if 'ttd_actions' in df_active.columns:
                 all_metrics.append('ttd_actions')
             if 'ttd_opp_actions' in df_active.columns:
@@ -236,7 +447,6 @@ with tab_match:
             mandatory_metrics = ['ttd_actions', 'ttd_opp_actions']
             selectable_metrics = [m for m in all_metrics if m not in mandatory_metrics]
             metric_names = {m: MATCH_METRIC_NAMES_RU.get(m, m) for m in selectable_metrics}
-            
             with st.expander("Настройка колонок общей таблицы"):
                 saved = st.session_state.match_selected_metrics if st.session_state.match_selected_metrics else []
                 default_selected = [m for m in saved if m in selectable_metrics]
@@ -278,7 +488,6 @@ with tab_match:
                         st.write(f'<div class="match-table">{df_pos.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
                     else:
                         st.info(f"Нет игроков позиции {pos}")
-            # Экспорт в Excel
             st.markdown("---")
             st.subheader("📥 Экспорт матчей (формат RuStat)")
             col_sel, col_team, col_season = st.columns([2, 1, 1])
@@ -349,5 +558,5 @@ with tab_match:
     else:
         st.info("Загрузите матчи (в боковой панели)")
 
-# Остальной код (редакторы весов) – как в предыдущей версии
-# ... (здесь должны быть редакторы весов, они не изменились, можно скопировать из предыдущего рабочего кода)
+# Редакторы весов (добавьте их сюда, если они есть в вашем коде, иначе они будут работать из sidebar)
+# ... (оставьте ваши редакторы весов без изменений)
