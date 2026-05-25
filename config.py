@@ -1,19 +1,20 @@
 import os
 
-# Пути к файлам настроек
+# Минимальное количество минут для включения в анализ
+MIN_MINUTES = 90
+
+# Файлы для сохранения настроек
 SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_settings.pkl')
 SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_selected_metrics.pkl')
 
-# Минимальное количество минут для включения игрока в анализ
-MIN_MINUTES = 90
-
-# ================== СЕЗОННЫЕ МЕТРИКИ ==================
+# Список всех возможных метрик (сезонные, с _p90)
 ALL_POSSIBLE_METRICS = [
     'goals_p90', 'assists_p90', 'shots_p90', 'shots_on_target_p90',
     'goals_by_head_p90', 'free_kick_shots_p90', 'free_kick_goals_p90',
     'shots_from_penalty_area_p90', 'shots_on_target_penalty_area_p90',
     'shots_outside_penalty_area_p90', 'shots_on_target_outside_penalty_area_p90',
-    'headers_p90', 'headers_on_target_p90', 'xG_p90',
+    'headers_p90', 'headers_on_target_p90',
+    'xG_p90',
     'key_passes_p90', 'passes_p90', 'pass_accuracy',
     'short_passes_p90', 'short_passes_accuracy',
     'long_passes_p90', 'long_passes_accuracy',
@@ -31,26 +32,35 @@ ALL_POSSIBLE_METRICS = [
     'attacking_challenges_p90', 'attacking_challenges_won_pct',
     'air_challenges_p90', 'air_challenges_won_pct',
     'tackles_p90', 'tackles_success_pct',
-    'interceptions_p90', 'loose_ball_recoveries_p90',
+    'interceptions_p90',
+    'loose_ball_recoveries_p90',
     'actions_opp_box_p90', 'actions_opp_box_success_p90',
-    'chances_p90', 'chances_successful_p90', 'chances_created_p90',
-    'involvement_scoring_p90', 'shots_on_target_pct',
+    'chances_p90', 'chances_successful_p90',
+    'chances_created_p90',
+    'involvement_scoring_p90',
+    'shots_on_target_pct',
     'lost_balls_p90', 'lost_balls_own_half_p90', 'individual_ball_losses_p90',
-    'lost_balls_after_passes_p90', 'challenges_unsuccessful_p90',
-    'dribbles_unsuccessful_p90', 'bad_ball_control_p90', 'offsides_p90',
+    'lost_balls_after_passes_p90',
+    'challenges_unsuccessful_p90', 'dribbles_unsuccessful_p90',
+    'bad_ball_control_p90', 'offsides_p90',
     'mistakes_goals_p90', 'mistakes_chances_p90',
-    'fouls_p90', 'fouls_suffered_p90', 'yellow_cards_p90', 'red_cards_p90',
+    'fouls_p90', 'fouls_suffered_p90',
+    'yellow_cards_p90', 'red_cards_p90',
     'ball_recoveries_p90', 'ball_recoveries_opp_half_p90',
     'actions_successful_p90', 'actions_unsuccessful_p90',
-    'final_third_entries_p90', 'final_third_carry_p90', 'final_third_entries_pass_p90',
-    'open_passes_received_p90', 'long_open_passes_received_p90',
+    'final_third_entries_p90', 'final_third_carry_p90',
+    'final_third_entries_pass_p90',
+    'open_passes_received_p90',
+    'long_open_passes_received_p90',
     'super_long_open_passes_received_p90',
-    'open_passes_received_first_third_p90', 'open_passes_received_central_third_p90',
-    'open_passes_received_final_third_p90', 'open_passes_received_opponent_box_p90',
-    # новые ТТД метрики
+    'open_passes_received_first_third_p90',
+    'open_passes_received_central_third_p90',
+    'open_passes_received_final_third_p90',
+    'open_passes_received_opponent_box_p90',
     'ttd_actions_p90', 'ttd_opp_actions_p90'
 ]
 
+# Негативные метрики (чем меньше, тем лучше)
 NEGATIVE_METRICS = [
     'lost_balls_p90', 'lost_balls_own_half_p90', 'individual_ball_losses_p90',
     'lost_balls_after_passes_p90', 'challenges_unsuccessful_p90',
@@ -61,9 +71,10 @@ NEGATIVE_METRICS = [
     'lost_balls_after_passes', 'challenges_unsuccessful',
     'dribbles_unsuccessful', 'bad_ball_control', 'offsides',
     'yellow_cards', 'red_cards', 'mistakes_goals', 'mistakes_chances',
-    'fouls', 'actions_unsuccessful'
+    'fouls', 'actions_unsuccessful',
 ]
 
+# Веса для сезонной статистики (по умолчанию)
 DEFAULT_METRICS_WEIGHTS = {
     'FW': {
         'goals_p90': 3.0, 'xG_p90': 2.5, 'shots_on_target_p90': 2.0,
@@ -112,12 +123,13 @@ DEFAULT_METRICS_WEIGHTS = {
         'ttd_actions_p90': 1.0, 'ttd_opp_actions_p90': 1.0,
     },
 }
-
+# Заполнение нулями для всех метрик
 for pos in DEFAULT_METRICS_WEIGHTS:
     for m in ALL_POSSIBLE_METRICS:
         if m not in DEFAULT_METRICS_WEIGHTS[pos]:
             DEFAULT_METRICS_WEIGHTS[pos][m] = 0.0
 
+# Русские названия метрик (сезон)
 METRIC_NAMES_RU = {
     'goals_p90': 'Голы', 'assists_p90': 'Голевые передачи',
     'shots_p90': 'Удары', 'shots_on_target_p90': 'Удары в створ',
@@ -155,7 +167,8 @@ METRIC_NAMES_RU = {
     'air_challenges_p90': 'Верховые единоборства',
     'air_challenges_won_pct': 'Верховые единоборства %',
     'tackles_p90': 'Отборы', 'tackles_success_pct': 'Отборы успешные %',
-    'interceptions_p90': 'Перехваты', 'loose_ball_recoveries_p90': 'Подборы',
+    'interceptions_p90': 'Перехваты',
+    'loose_ball_recoveries_p90': 'Подборы',
     'actions_opp_box_p90': 'Действия в штрафной соперника',
     'actions_opp_box_success_p90': 'Успешные действия в штрафной',
     'chances_p90': 'Голевые моменты', 'chances_successful_p90': 'Реализованные моменты',
@@ -186,10 +199,11 @@ METRIC_NAMES_RU = {
     'open_passes_received_central_third_p90': 'Принято в центр. трети',
     'open_passes_received_final_third_p90': 'Принято в финальной трети',
     'open_passes_received_opponent_box_p90': 'Принято в штрафной',
-    'ttd_actions_p90': 'ТТД/уд (всего/удачные)', 'ttd_opp_actions_p90': 'ТТД у чужих ворот/уд',
+    'ttd_actions_p90': 'ТТД/уд (всего/удачные)',
+    'ttd_opp_actions_p90': 'ТТД у чужих ворот/уд',
 }
 
-# ================== МАТЧЕВЫЕ МЕТРИКИ ==================
+# ---- Матчевые метрики ----
 MATCH_ALL_METRICS = [
     'goals', 'assists', 'shots', 'shots_on_target',
     'goals_by_head', 'free_kick_shots', 'free_kick_goals',
@@ -227,55 +241,6 @@ MATCH_ALL_METRICS = [
     'open_passes_received_first_third', 'open_passes_received_central_third',
     'open_passes_received_final_third', 'open_passes_received_opponent_box',
 ]
-
-DEFAULT_MATCH_WEIGHTS = {
-    'FW': {
-        'goals': 3.0, 'xG': 2.5, 'shots_on_target': 2.0,
-        'assists': 1.5, 'dribbles': 1.2, 'actions_opp_box': 1.2,
-        'chances_successful': 1.0, 'key_passes': 1.0, 'pass_accuracy': 0.5,
-        'lost_balls': -2.0, 'individual_ball_losses': -1.5,
-        'yellow_cards': -0.5, 'red_cards': -3.0, 'mistakes_goals': -2.5,
-        'mistakes_chances': -1.0, 'fouls': -0.5,
-    },
-    'AM': {
-        'key_passes': 3.0, 'assists': 2.5, 'progressive_passes': 2.0,
-        'pass_accuracy': 1.5, 'dribbles': 1.5, 'goals': 1.0,
-        'xG': 1.0, 'shots_on_target': 1.0, 'chances': 1.0,
-        'lost_balls': -1.5, 'individual_ball_losses': -1.0,
-        'yellow_cards': -0.5, 'red_cards': -3.0, 'mistakes_goals': -1.5,
-        'mistakes_chances': -1.0, 'fouls': -0.5,
-    },
-    'CM': {
-        'pass_accuracy': 3.0, 'progressive_passes': 2.5, 'interceptions': 2.0,
-        'tackles': 1.5, 'key_passes': 1.5, 'progressive_passes_accuracy': 1.5,
-        'challenges_won_pct': 1.0, 'ball_recoveries': 1.0,
-        'lost_balls_own_half': -2.0, 'lost_balls': -1.5,
-        'individual_ball_losses': -1.0, 'yellow_cards': -1.0,
-        'red_cards': -3.0, 'mistakes_goals': -2.0, 'mistakes_chances': -1.5,
-        'fouls': -0.5,
-    },
-    'FB': {
-        'tackles': 2.5, 'interceptions': 2.0, 'crosses_accuracy': 2.0,
-        'pass_accuracy': 1.5, 'tackles_success_pct': 1.5, 'dribbles': 1.2,
-        'key_passes': 1.2, 'progressive_passes': 1.0,
-        'mistakes_goals': -2.5, 'mistakes_chances': -1.5,
-        'lost_balls_own_half': -2.0, 'lost_balls': -1.0,
-        'yellow_cards': -1.0, 'red_cards': -3.0, 'fouls': -0.5,
-    },
-    'CB': {
-        'interceptions': 3.0, 'tackles': 2.5, 'air_challenges_won_pct': 2.5,
-        'tackles_success_pct': 2.0, 'challenges_won_pct': 1.5, 'ball_recoveries': 1.5,
-        'loose_ball_recoveries': 1.5, 'pass_accuracy': 1.0,
-        'mistakes_goals': -3.0, 'mistakes_chances': -2.0,
-        'lost_balls_own_half': -2.5, 'individual_ball_losses': -1.5,
-        'yellow_cards': -1.0, 'red_cards': -3.5, 'fouls': -1.0,
-    },
-}
-
-for pos in DEFAULT_MATCH_WEIGHTS:
-    for m in MATCH_ALL_METRICS:
-        if m not in DEFAULT_MATCH_WEIGHTS[pos]:
-            DEFAULT_MATCH_WEIGHTS[pos][m] = 0.0
 
 MATCH_METRIC_NAMES_RU = {
     'goals': 'Голы', 'assists': 'Голевые передачи',
@@ -347,3 +312,52 @@ MATCH_METRIC_NAMES_RU = {
     'open_passes_received_final_third': 'Принято в финальной трети',
     'open_passes_received_opponent_box': 'Принято в штрафной',
 }
+
+DEFAULT_MATCH_WEIGHTS = {
+    'FW': {
+        'goals': 3.0, 'xG': 2.5, 'shots_on_target': 2.0,
+        'assists': 1.5, 'dribbles': 1.2, 'actions_opp_box': 1.2,
+        'chances_successful': 1.0, 'key_passes': 1.0, 'pass_accuracy': 0.5,
+        'lost_balls': -2.0, 'individual_ball_losses': -1.5,
+        'yellow_cards': -0.5, 'red_cards': -3.0, 'mistakes_goals': -2.5,
+        'mistakes_chances': -1.0, 'fouls': -0.5,
+    },
+    'AM': {
+        'key_passes': 3.0, 'assists': 2.5, 'progressive_passes': 2.0,
+        'pass_accuracy': 1.5, 'dribbles': 1.5, 'goals': 1.0,
+        'xG': 1.0, 'shots_on_target': 1.0, 'chances': 1.0,
+        'lost_balls': -1.5, 'individual_ball_losses': -1.0,
+        'yellow_cards': -0.5, 'red_cards': -3.0, 'mistakes_goals': -1.5,
+        'mistakes_chances': -1.0, 'fouls': -0.5,
+    },
+    'CM': {
+        'pass_accuracy': 3.0, 'progressive_passes': 2.5, 'interceptions': 2.0,
+        'tackles': 1.5, 'key_passes': 1.5, 'progressive_passes_accuracy': 1.5,
+        'challenges_won_pct': 1.0, 'ball_recoveries': 1.0,
+        'lost_balls_own_half': -2.0, 'lost_balls': -1.5,
+        'individual_ball_losses': -1.0, 'yellow_cards': -1.0,
+        'red_cards': -3.0, 'mistakes_goals': -2.0, 'mistakes_chances': -1.5,
+        'fouls': -0.5,
+    },
+    'FB': {
+        'tackles': 2.5, 'interceptions': 2.0, 'crosses_accuracy': 2.0,
+        'pass_accuracy': 1.5, 'tackles_success_pct': 1.5, 'dribbles': 1.2,
+        'key_passes': 1.2, 'progressive_passes': 1.0,
+        'mistakes_goals': -2.5, 'mistakes_chances': -1.5,
+        'lost_balls_own_half': -2.0, 'lost_balls': -1.0,
+        'yellow_cards': -1.0, 'red_cards': -3.0, 'fouls': -0.5,
+    },
+    'CB': {
+        'interceptions': 3.0, 'tackles': 2.5, 'air_challenges_won_pct': 2.5,
+        'tackles_success_pct': 2.0, 'challenges_won_pct': 1.5, 'ball_recoveries': 1.5,
+        'loose_ball_recoveries': 1.5, 'pass_accuracy': 1.0,
+        'mistakes_goals': -3.0, 'mistakes_chances': -2.0,
+        'lost_balls_own_half': -2.5, 'individual_ball_losses': -1.5,
+        'yellow_cards': -1.0, 'red_cards': -3.5, 'fouls': -1.0,
+    },
+}
+# Заполняем нулями отсутствующие матчевые метрики
+for pos in DEFAULT_MATCH_WEIGHTS:
+    for m in MATCH_ALL_METRICS:
+        if m not in DEFAULT_MATCH_WEIGHTS[pos]:
+            DEFAULT_MATCH_WEIGHTS[pos][m] = 0.0
