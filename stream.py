@@ -37,7 +37,6 @@ st.markdown("""
 thead tr th {
     position: sticky !important;
     top: 0 !important;
-    background-color: #f0f2f6 !important;
     z-index: 1;
 }
 /* Исправление белого фона строк в матчевых таблицах */
