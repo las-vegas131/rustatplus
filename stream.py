@@ -4,11 +4,12 @@ import io
 import os
 import plotly.graph_objects as go
 from collections import defaultdict
+import psycopg2
 
 from config import (
     MIN_MINUTES, SETTINGS_FILE, SELECTED_METRICS_FILE,
     ALL_POSSIBLE_METRICS, DEFAULT_METRICS_WEIGHTS, DEFAULT_MATCH_WEIGHTS,
-    METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU, MATCH_ALL_METRICS
+    METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU, MATCH_ALL_METRICS, NEGATIVE_METRICS
 )
 from utils import (
     load_settings, save_settings, load_selected_metrics, save_selected_metrics,
@@ -30,9 +31,6 @@ from visualization import (
     create_player_radar_figure, create_compare_figure, create_position_radar,
     export_matches_advanced
 )
-
-# Подключаем psycopg2 для работы с БД в боковой панели
-import psycopg2
 
 st.set_page_config(page_title="InStat Analyst", layout="wide")
 
@@ -446,7 +444,6 @@ with tab_match:
             else:
                 position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings)
             all_metrics = [m for m in MATCH_ALL_METRICS if m in df_active.columns]
-            # Добавляем ТТД-метрики в список доступных, если они есть
             if 'ttd_actions' in df_active.columns:
                 all_metrics.append('ttd_actions')
             if 'ttd_opp_actions' in df_active.columns:
@@ -571,9 +568,6 @@ with tab_match:
     else:
         st.info("Загрузите матчи (в боковой панели)")
 
-# Редакторы весов (сезон и матч) – здесь можно добавить код из старой версии, если он был. Для краткости опущен, но он не влияет на работу.
-
-# Редакторы весов (без изменений, можно оставить как в старом коде)
 # -------------------- РЕДАКТОР ВЕСОВ (СЕЗОН) --------------------
 if st.session_state.get('show_weights_editor'):
     with st.expander("Редактор весов метрик (сезон)", expanded=True):
@@ -637,8 +631,12 @@ if st.session_state.get('show_match_weights_editor'):
         )
         if active_df is not None:
             available_metrics = [m for m in MATCH_ALL_METRICS if m in active_df.columns]
+            if 'ttd_actions' in active_df.columns:
+                available_metrics.append('ttd_actions')
+            if 'ttd_opp_actions' in active_df.columns:
+                available_metrics.append('ttd_opp_actions')
         else:
-            available_metrics = MATCH_ALL_METRICS
+            available_metrics = MATCH_ALL_METRICS + ['ttd_actions', 'ttd_opp_actions']
         weight_tabs = st.tabs([pos_names[p] for p in positions_order])
         new_weights = {}
         for idx, pos in enumerate(positions_order):
