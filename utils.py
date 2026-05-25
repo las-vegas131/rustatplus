@@ -1,4 +1,3 @@
-# utils.py
 import os
 import pickle
 import pandas as pd
@@ -56,10 +55,8 @@ def save_selected_metrics(metrics, metrics_file):
     with open(metrics_file, 'wb') as f:
         pickle.dump(metrics, f)
 
-# Для матчевых метрик
-MATCH_SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_match_selected_metrics.pkl')
-
 def load_match_selected_metrics():
+    from config import MATCH_SELECTED_METRICS_FILE
     if os.path.exists(MATCH_SELECTED_METRICS_FILE):
         try:
             with open(MATCH_SELECTED_METRICS_FILE, 'rb') as f:
@@ -69,5 +66,6 @@ def load_match_selected_metrics():
     return None
 
 def save_match_selected_metrics(metrics):
+    from config import MATCH_SELECTED_METRICS_FILE
     with open(MATCH_SELECTED_METRICS_FILE, 'wb') as f:
         pickle.dump(metrics, f)
