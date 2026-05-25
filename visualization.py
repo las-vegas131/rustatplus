@@ -1,3 +1,4 @@
+import io
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -5,9 +6,12 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
 from collections import defaultdict
-from config import NEGATIVE_METRICS, MATCH_METRIC_NAMES_RU
-from calculations import get_position_group, percentile_normalize
+import streamlit as st
 
+from config import NEGATIVE_METRICS, METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU
+from calculations import get_position_group, percentile_normalize, format_match_metric
+
+# -------------------- Радары (Plotly) --------------------
 def normalize_for_radar(df, metrics, player_row):
     normed = pd.Series(index=metrics, dtype=float)
     for m in metrics:
@@ -23,7 +27,6 @@ def normalize_for_radar(df, metrics, player_row):
     return normed
 
 def build_radar_labels(metrics, players, avg_series=None):
-    from config import METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU
     labels = []
     for m in metrics:
         name = METRIC_NAMES_RU.get(m, m) if m.endswith('_p90') or m == 'pass_accuracy' else MATCH_METRIC_NAMES_RU.get(m, m)
@@ -31,10 +34,8 @@ def build_radar_labels(metrics, players, avg_series=None):
         for p in players:
             val = p[m]
             if m.endswith('_pct') or m == 'pass_accuracy':
-                from calculations import format_match_metric
                 detail = format_match_metric(m, val, p)
             else:
-                from calculations import format_match_metric
                 detail = format_match_metric(m, val, p)
             lines.append(f"{p['player']}: {detail}")
         if avg_series is not None and m in avg_series:
@@ -67,11 +68,9 @@ def create_player_radar_figure(player_row, df, position_weights, avg_values=None
     sorted_metrics = sorted(weights.items(), key=lambda x: -abs(x[1]))
     radar_metrics = [m for m, _ in sorted_metrics if m in df.columns][:8]
     if not radar_metrics:
-        radar_metrics = [c for c in df.columns if c.endswith('_p90') or c.endswith('_pct') or c in ['goals', 'assists']][:8]
-
+        radar_metrics = [c for c in df.columns if c.endswith('_p90') or c.endswith('_pct')][:8]
     labels = build_radar_labels(radar_metrics, [player_row], avg_series=avg_values)
     values = normalize_for_radar(df, radar_metrics, player_row).tolist()
-
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
         r=values + values[:1],
@@ -82,7 +81,6 @@ def create_player_radar_figure(player_row, df, position_weights, avg_values=None
     ))
     if avg_values is not None:
         add_average_trace(fig, radar_metrics, avg_values, labels, df)
-
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
@@ -94,10 +92,8 @@ def create_player_radar_figure(player_row, df, position_weights, avg_values=None
 def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
     players = [p1, p2]
     labels = build_radar_labels(radar_metrics, players, avg_series=avg_values)
-
     vals1 = normalize_for_radar(full_df, radar_metrics, p1).tolist()
     vals2 = normalize_for_radar(full_df, radar_metrics, p2).tolist()
-
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
         r=vals1 + vals1[:1],
@@ -115,7 +111,6 @@ def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
     ))
     if avg_values is not None:
         add_average_trace(fig, radar_metrics, avg_values, labels, full_df)
-
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
@@ -128,7 +123,6 @@ def create_compare_figure(p1, p2, radar_metrics, full_df, avg_values=None):
 def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values=None):
     fig = go.Figure()
     labels = build_radar_labels(pos_metrics[:8], players_data, avg_series=avg_values)
-
     for i, player_row in enumerate(players_data):
         values = normalize_for_radar(full_df, pos_metrics[:8], player_row).tolist()
         color = colors[i % len(colors)]
@@ -142,7 +136,6 @@ def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values
         ))
     if avg_values is not None:
         add_average_trace(fig, pos_metrics[:8], avg_values, labels, full_df)
-
     fig.update_layout(
         polar=dict(radialaxis=dict(range=[0, 1], showticklabels=False)),
         showlegend=True,
@@ -152,7 +145,13 @@ def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values
     )
     return fig
 
+# -------------------- Экспорт в Excel (формат RuStat) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
+    """
+    Экспорт матчевой статистики в формате RuStat.
+    Заголовки – вертикальные (textRotation=255).
+    Закрепление: строка заголовков и столбцы Амплуа/Игрок.
+    """
     position_ru = {'CB': 'ЦЗ', 'FB': 'КЗ', 'CM': 'НОП', 'CDM': 'НОП',
                    'AM': 'ВОП', 'CAM': 'ВОП', 'CF': 'НАП', 'FW': 'НАП', 'ST': 'НАП'}
     position_order = ['CB', 'FB', 'CM', 'AM', 'FW']
@@ -173,7 +172,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         succ = int(round(t * acc / 100))
         return f"{t}/{succ}"
 
-    # Сбор данных
+    # Сбор данных (аналогично предыдущей версии)
     all_rows = []
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
@@ -206,8 +205,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 player_name = player_row['player']
                 minutes = safe_int(player_row.get('minutes', 0))
                 season_vals = player_season_map.get(player_name, {}) if player_season_map else {}
-                is_best = {}
-                is_worst = {}
+                is_best, is_worst = {}, {}
                 for m in best_worst.get(pos, {}):
                     val = player_row[m]
                     maxv, minv = best_worst[pos][m]['max'], best_worst[pos][m]['min']
@@ -367,7 +365,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 ws.cell(row=row_idx, column=10, value=frac(match['passes_total'], match['passes_acc']))
                 ws.cell(row=row_idx, column=11, value=frac(match['prog_total'], match['prog_acc']))
                 ws.cell(row=row_idx, column=12, value=frac(match['ft_total'], match['ft_acc']))
-                ws.cell(row=row_idx, column=13, value=frac(match['ft_total'], match['ft_acc']))
+                ws.cell(row=row_idx, column=13, value=frac(match['ft_total'], match['ft_acc']))  # дубль
                 ws.cell(row=row_idx, column=14, value=frac(match['pen_total'], match['pen_acc']))
                 ws.cell(row=row_idx, column=15, value=match['key_passes'] if match['key_passes'] > 0 else '')
                 ws.cell(row=row_idx, column=16, value=frac(match['crosses_total'], match['crosses_acc']))
@@ -393,7 +391,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
             else:
                 cell.alignment = Alignment(horizontal='center', vertical='center')
 
-    # Автоширина колонок
+    # Автоширина
     for col in ws.columns:
         max_len = 0
         col_letter = get_column_letter(col[0].column)
@@ -406,3 +404,4 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
 
     wb.save(output_bytes_io)
+    st.success("Экспорт завершён")
