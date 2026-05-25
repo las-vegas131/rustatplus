@@ -40,13 +40,16 @@ st.markdown("""
 thead tr th {
     position: sticky !important;
     top: 0 !important;
-    background-color: #f0f2f6 !important;
+    background-color: transparent !important;
     z-index: 1;
 }
 .match-table tbody tr, .match-table tbody td {
     background-color: transparent !important;
 }
 .stDataFrame tbody tr, .stDataFrame tbody td {
+    background-color: transparent !important;
+}
+.match-table th {
     background-color: transparent !important;
 }
 </style>
@@ -82,7 +85,7 @@ if 'avg_league' not in st.session_state:
 if 'avg_season' not in st.session_state:
     st.session_state.avg_season = None
 
-# Боковая панель (импорт, загрузка и т.д.)
+# Боковая панель
 with st.sidebar:
     st.header("📤 Импорт Excel")
     uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
@@ -358,6 +361,7 @@ with tab_season:
                     with col2:
                         fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
                         st.plotly_chart(fig, use_container_width=True)
+
         for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
             with subtabs[i]:
                 rows, headers = position_tables_active.get(pos, ([], []))
@@ -438,18 +442,18 @@ with tab_match:
                 active_match_id = mid
                 break
         if active_match_id is not None:
-            df_active = st.session_state.df_matches[active_match_id]['df']
+            df_active_full = st.session_state.df_matches[active_match_id]['df']
+            min_minutes_filter = st.selectbox("Минимальное время игрока (минуты)", [10, 20, 30, 45], index=3, key="min_minutes_filter")
+            df_active = df_active_full[df_active_full['minutes'] >= min_minutes_filter].copy()
             if 'match_tables' in st.session_state and active_match_id in st.session_state.match_tables:
-                position_tables_active = st.session_state.match_tables[active_match_id]
+                position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings)
             else:
                 position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings)
             all_metrics = [m for m in MATCH_ALL_METRICS if m in df_active.columns]
-            # Добавляем ТТД-метрики, если они есть
             ttd_metrics = ['ttd_actions', 'ttd_opp_actions']
             for tm in ttd_metrics:
                 if tm in df_active.columns:
                     all_metrics.append(tm)
-            # Обязательные метрики для отображения (ТТД)
             mandatory_metrics = [tm for tm in ttd_metrics if tm in df_active.columns]
             selectable_metrics = [m for m in all_metrics if m not in mandatory_metrics]
             metric_names = {m: MATCH_METRIC_NAMES_RU.get(m, m) for m in selectable_metrics}
@@ -479,13 +483,26 @@ with tab_match:
             (↑) – в матче лучше своего среднего за сезон &nbsp;&nbsp; (↓) – хуже своего среднего
             </div>
             """, unsafe_allow_html=True)
+
             with subtabs[0]:
                 league_avg = st.session_state.get('league_avg')
                 player_season_map = st.session_state.get('player_season_map')
                 df_main = build_match_main_table(df_active, selected_metrics,
                                                 league_avg=league_avg,
                                                 player_season_map=player_season_map)
+                # Добавляем ключ для обработки выбора строки
                 st.write(f'<div class="match-table">{df_main.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
+                # Радар при клике – используем session_state для хранения выбранного игрока
+                # Проще: добавить selectbox для выбора игрока из списка
+                player_list = df_active['player'].tolist()
+                selected_player = st.selectbox("Выберите игрока для радара", player_list, key="match_radar_player")
+                if selected_player:
+                    player_row = df_active[df_active['player'] == selected_player].iloc[0]
+                    col1, col2, col3 = st.columns([1, 2, 1])
+                    with col2:
+                        fig = create_player_radar_figure(player_row, df_active, st.session_state.match_settings, avg_values=league_avg)
+                        st.plotly_chart(fig, use_container_width=True)
+
             for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
                 with subtabs[i]:
                     rows, headers = position_tables_active.get(pos, ([], []))
@@ -493,8 +510,19 @@ with tab_match:
                         numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
                         df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
                         st.write(f'<div class="match-table">{df_pos.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
+                        # Для каждой позиции добавляем selectbox для выбора игрока
+                        if len(rows) > 0:
+                            player_names = [r[0] for r in rows]
+                            selected_player_pos = st.selectbox(f"Выберите игрока для радара ({pos})", player_names, key=f"radar_player_{pos}")
+                            if selected_player_pos:
+                                player_row = df_active[df_active['player'] == selected_player_pos].iloc[0]
+                                col1, col2, col3 = st.columns([1, 2, 1])
+                                with col2:
+                                    fig = create_player_radar_figure(player_row, df_active, st.session_state.match_settings, avg_values=league_avg)
+                                    st.plotly_chart(fig, use_container_width=True)
                     else:
-                        st.info(f"Нет игроков позиции {pos}")
+                        st.info(f"Нет игроков позиции {pos} при фильтре минут ≥ {min_minutes_filter}")
+
             # Экспорт в Excel
             st.markdown("---")
             st.subheader("📥 Экспорт матчей (формат RuStat)")
