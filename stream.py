@@ -562,29 +562,22 @@ with tab_match:
                         )
                     except Exception as e:
                         st.error(f"Ошибка: {e}")
-            if st.button("📥 Экспорт в Excel (стандартный)", key="export_match"):
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_main = build_match_main_table(df_active, selected_metrics)
-                    df_main.to_excel(writer, sheet_name='Общий рейтинг', index=False)
-                    for pos, (rows, headers) in position_tables_active.items():
-                        if rows:
-                            df_pos = pd.DataFrame(rows, columns=headers)
-                            df_pos.to_excel(writer, sheet_name=pos, index=False)
-                            from openpyxl.formatting.rule import ColorScaleRule
-                            from openpyxl.utils import get_column_letter
-                            ws = writer.sheets[pos]
-                            metric_columns = list(range(4, 4 + len(headers) - 3))
-                            for col_idx in metric_columns:
-                                col_letter = get_column_letter(col_idx)
-                                max_row = len(rows) + 1
-                                ws.conditional_formatting.add(
-                                    f'{col_letter}2:{col_letter}{max_row}',
-                                    ColorScaleRule(start_type='min', start_color='FFC7CE',
-                                                  mid_type='percentile', mid_value=50, mid_color='FFFFEB',
-                                                  end_type='max', end_color='C6EFCE')
-                                )
-                st.download_button(label="Скачать Excel", data=output.getvalue(), file_name="match_players_rating.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+              if st.button("📥 Экспорт в Excel (стандартный)", key="export_match"):
+    output = io.BytesIO()
+    try:
+        export_match_standard_with_charts(
+            df_active, selected_metrics, position_tables_active, league_avg, output
+        )
+        output.seek(0)
+        st.download_button(
+            label="Скачать Excel",
+            data=output,
+            file_name=f"match_players_rating_{selected_label}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_standard_match"
+        )
+    except Exception as e:
+        st.error(f"Ошибка при экспорте: {e}")
     else:
         st.info("Загрузите матчи (в боковой панели)")
 
