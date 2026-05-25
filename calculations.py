@@ -377,19 +377,19 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
             tables[pos] = ([], [])
             continue
         metrics = [m for m, w in position_weights.get(pos, {}).items() if w != 0 and m in df.columns]
-        # Добавляем ТТД метрики, если есть соответствующие поля
+        # Добавляем обязательные ТТД, если есть соответствующие поля в df
         if 'actions' in df.columns and 'actions_successful' in df.columns:
-            if 'ttd_actions' not in metrics:
+            if 'ttd_actions' not in metrics and 'ttd_actions' in df.columns:
                 metrics.append('ttd_actions')
         if 'actions_opp_box' in df.columns and 'actions_opp_box_success' in df.columns:
-            if 'ttd_opp_actions' not in metrics:
+            if 'ttd_opp_actions' not in metrics and 'ttd_opp_actions' in df.columns:
                 metrics.append('ttd_opp_actions')
+        # Фильтруем метрики: оставляем только те, что есть в df
+        metrics = [m for m in metrics if m in df.columns]
         if not metrics:
             tables[pos] = ([], [])
             continue
         for m in metrics:
-            if m not in pos_df.columns:
-                continue
             col = pos_df[m]
             min_val, max_val = col.min(), col.max()
             if max_val - min_val == 0:
@@ -398,8 +398,8 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
                 pos_df[f'{m}_norm_pos'] = (col - min_val) / (max_val - min_val)
             if m in NEGATIVE_METRICS:
                 pos_df[f'{m}_norm_pos'] = 1.0 - pos_df[f'{m}_norm_pos']
-        max_vals = {m: pos_df[f'{m}_norm_pos'].max() for m in metrics if m in pos_df.columns}
-        min_vals = {m: pos_df[f'{m}_norm_pos'].min() for m in metrics if m in pos_df.columns}
+        max_vals = {m: pos_df[f'{m}_norm_pos'].max() for m in metrics}
+        min_vals = {m: pos_df[f'{m}_norm_pos'].min() for m in metrics}
         rows = []
         for _, player_row in pos_df.iterrows():
             player_name = player_row['player']
@@ -438,13 +438,12 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
 
 def build_match_main_table(df, selected_metrics, league_avg=None, player_season_map=None):
     mandatory_metrics = ['ttd_actions', 'ttd_opp_actions']
+    # Отбираем только те метрики, которые есть в df
     metrics = [m for m in selected_metrics if m in df.columns]
-    if 'actions' in df.columns and 'actions_successful' in df.columns:
-        if 'ttd_actions' not in metrics:
-            metrics.append('ttd_actions')
-    if 'actions_opp_box' in df.columns and 'actions_opp_box_success' in df.columns:
-        if 'ttd_opp_actions' not in metrics:
-            metrics.append('ttd_opp_actions')
+    # Добавляем обязательные, если они есть в df и ещё не добавлены
+    for m in mandatory_metrics:
+        if m in df.columns and m not in metrics:
+            metrics.append(m)
     if not metrics:
         return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
     norm_cols = {}
