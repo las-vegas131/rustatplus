@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 from openpyxl.utils import get_column_letter
-from openpyxl.chart import RadarChart, Reference
+from openpyxl.formatting.rule import ColorScaleRule
 from collections import defaultdict
 import streamlit as st
 
@@ -148,9 +148,6 @@ def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values
 
 # -------------------- Экспорт в Excel (формат RuStat) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
-    """
-    Экспорт матчей в формат RuStat (один лист, вертикальные заголовки, группировка по игрокам).
-    """
     position_ru = {'CB': 'ЦЗ', 'FB': 'КЗ', 'CM': 'НОП', 'CDM': 'НОП',
                    'AM': 'ВОП', 'CAM': 'ВОП', 'CF': 'НАП', 'FW': 'НАП', 'ST': 'НАП'}
     position_order = ['CB', 'FB', 'CM', 'AM', 'FW']
@@ -171,7 +168,6 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         succ = int(round(t * acc / 100))
         return f"{t}/{succ}"
 
-    # Сбор данных
     all_rows = []
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
@@ -400,121 +396,36 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
     wb.save(output_bytes_io)
     st.success("Экспорт RuStat завершён")
 
-# -------------------- Стандартный экспорт матча с нативными радарами Excel --------------------
-def export_match_standard_with_charts(df_match, selected_metrics, position_tables, league_avg, output_bytes_io):
+# -------------------- Стандартный экспорт матча с разбивкой по позициям --------------------
+def export_match_standard_position_tables(df_match, selected_metrics, position_tables, league_avg, output_bytes_io):
     """
-    Экспорт матча в Excel: лист 'Данные' + лист 'Радары' с диаграммами (RadarChart через openpyxl).
+    Стандартный экспорт матча в Excel с разбивкой по позициям.
+    В заголовках общей таблицы отображаются средние значения по лиге.
     """
     wb = Workbook()
-    ws_data = wb.active
-    ws_data.title = 'Данные'
+    default_sheet = wb.active
+    wb.remove(default_sheet)
 
-    # 1. Общая таблица
+    # 1. Лист "Общий рейтинг" (средние по лиге передаются в build_match_main_table)
+    ws_main = wb.create_sheet("Общий рейтинг")
     df_main = build_match_main_table(df_match, selected_metrics,
                                      league_avg=league_avg,
                                      player_season_map=None)
-    for r_idx, row in enumerate(df_main.values, start=1):
-        for c_idx, value in enumerate(row, start=1):
-            ws_data.cell(row=r_idx, column=c_idx, value=value)
-    for c_idx, header in enumerate(df_main.columns, start=1):
-        cell = ws_data.cell(row=1, column=c_idx, value=header)
+    for col_idx, header in enumerate(df_main.columns, start=1):
+        cell = ws_main.cell(row=1, column=col_idx, value=header)
         cell.font = Font(bold=True)
-
-    # 2. Таблицы по позициям
-    next_row = len(df_main) + 3
-    for pos, (rows, headers) in position_tables.items():
-        if rows:
-            for col_idx, header in enumerate(headers, start=1):
-                cell = ws_data.cell(row=next_row, column=col_idx, value=header)
-                cell.font = Font(bold=True)
-            next_row += 1
-            for row in rows:
-                for col_idx, val in enumerate(row, start=1):
-                    ws_data.cell(row=next_row, column=col_idx, value=val)
-                next_row += 1
-            next_row += 1
-
-    # 3. Лист с радарами (Excel native)
-    ws_radar = wb.create_sheet("Радары")
-    ws_radar.column_dimensions['A'].width = 30
-    current_row = 1
-
-    # Определяем метрики для радара (все числовые, кроме ТТД и служебных)
-    exclude = ['player', 'position', 'minutes', 'team', 'league', 'pos_group', 'ttd_actions', 'ttd_opp_actions']
-    all_numeric = [m for m in df_match.columns if m not in exclude and pd.api.types.is_numeric_dtype(df_match[m])]
-    radar_metrics = all_numeric[:12]  # не более 12 метрик для читаемости
-    if not radar_metrics:
-        radar_metrics = [m for m in df_match.columns if m.endswith('_p90')][:8]
-
-    # Для каждого игрока создаём радар
-    for _, player_row in df_match.iterrows():
-        player_name = player_row['player']
-        # Вычисляем нормализованные значения (0..1) для метрик
-        norm_values = []
-        avg_values = []
-        for m in radar_metrics:
-            if m in df_match.columns:
-                min_val = df_match[m].min()
-                max_val = df_match[m].max()
-                if max_val - min_val == 0:
-                    norm = 0.5
-                else:
-                    norm = (player_row[m] - min_val) / (max_val - min_val)
-                    if m in NEGATIVE_METRICS:
-                        norm = 1.0 - norm
-                norm_values.append(norm)
-                # Среднее по лиге (если есть)
-                if league_avg and m in league_avg:
-                    avg = league_avg[m]
-                    if max_val - min_val == 0:
-                        avg_norm = 0.5
-                    else:
-                        avg_norm = (avg - min_val) / (max_val - min_val)
-                        if m in NEGATIVE_METRICS:
-                            avg_norm = 1.0 - avg_norm
-                    avg_values.append(avg_norm)
-                else:
-                    avg_values.append(0.5)
-            else:
-                norm_values.append(0.5)
-                avg_values.append(0.5)
-
-        # Записываем данные на лист
-        start_row = current_row
-        ws_radar.cell(row=start_row, column=1, value=player_name)
-        ws_radar.cell(row=start_row, column=1).font = Font(bold=True, size=12)
-        start_row += 1
-        # Заголовки метрик
-        for i, m in enumerate(radar_metrics, start=1):
-            ws_radar.cell(row=start_row, column=i, value=MATCH_METRIC_NAMES_RU.get(m, m))
-        start_row += 1
-        # Значения игрока
-        for i, val in enumerate(norm_values, start=1):
-            ws_radar.cell(row=start_row, column=i, value=val)
-        start_row += 1
-        # Средние значения
-        for i, val in enumerate(avg_values, start=1):
-            ws_radar.cell(row=start_row, column=i, value=val)
-        start_row += 1
-
-        # Создаём радарную диаграмму
-        radar = RadarChart()
-        radar.add_data(Reference(ws_radar, min_row=start_row-2, max_row=start_row-1, min_col=1, max_col=len(radar_metrics)), titles_from_data=False)
-        radar.set_categories(Reference(ws_radar, min_row=start_row-3, max_row=start_row-3, min_col=1, max_col=len(radar_metrics)))
-        radar.title = player_name
-        radar.style = 26
-        radar.y_axis.title = "Нормализованное значение"
-        radar.x_axis.title = "Метрики"
-        # Размещаем диаграмму на листе
-        pos_row = start_row + 1
-        ws_radar.add_chart(radar, f"A{pos_row}")
-        # Увеличиваем высоту строк для диаграммы
-        for i in range(20):
-            ws_radar.row_dimensions[pos_row + i].height = 15
-        current_row = pos_row + 25
-
-    # Автоширина для листа 'Данные'
-    for col in ws_data.columns:
+    for r_idx, row in enumerate(df_main.values, start=2):
+        for c_idx, value in enumerate(row, start=1):
+            ws_main.cell(row=r_idx, column=c_idx, value=value)
+    for col_idx in range(4, len(df_main.columns) + 1):
+        col_letter = get_column_letter(col_idx)
+        ws_main.conditional_formatting.add(
+            f'{col_letter}2:{col_letter}{len(df_main)+1}',
+            ColorScaleRule(start_type='min', start_color='FFC7CE',
+                           mid_type='percentile', mid_value=50, mid_color='FFFFEB',
+                           end_type='max', end_color='C6EFCE')
+        )
+    for col in ws_main.columns:
         max_len = 0
         col_letter = get_column_letter(col[0].column)
         for cell in col:
@@ -524,7 +435,39 @@ def export_match_standard_with_charts(df_match, selected_metrics, position_table
                         max_len = len(str(cell.value))
                 except:
                     pass
-        ws_data.column_dimensions[col_letter].width = min(max_len + 2, 50)
+        ws_main.column_dimensions[col_letter].width = min(max_len + 2, 50)
+
+    # 2. Листы по позициям (средние по лиге не нужны – они не передаются)
+    positions = ['FW', 'AM', 'CM', 'FB', 'CB']
+    for pos in positions:
+        rows, headers = position_tables.get(pos, ([], []))
+        if rows:
+            ws = wb.create_sheet(pos)
+            for col_idx, header in enumerate(headers, start=1):
+                cell = ws.cell(row=1, column=col_idx, value=header)
+                cell.font = Font(bold=True)
+            for r_idx, row in enumerate(rows, start=2):
+                for c_idx, val in enumerate(row, start=1):
+                    ws.cell(row=r_idx, column=c_idx, value=val)
+            for col_idx in range(4, len(headers) + 1):
+                col_letter = get_column_letter(col_idx)
+                ws.conditional_formatting.add(
+                    f'{col_letter}2:{col_letter}{len(rows)+1}',
+                    ColorScaleRule(start_type='min', start_color='FFC7CE',
+                                   mid_type='percentile', mid_value=50, mid_color='FFFFEB',
+                                   end_type='max', end_color='C6EFCE')
+                )
+            for col in ws.columns:
+                max_len = 0
+                col_letter = get_column_letter(col[0].column)
+                for cell in col:
+                    if cell.value:
+                        try:
+                            if len(str(cell.value)) > max_len:
+                                max_len = len(str(cell.value))
+                        except:
+                            pass
+                ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
 
     wb.save(output_bytes_io)
-    st.success("Стандартный экспорт с радарами (Excel native) завершён")
+    st.success("Стандартный экспорт завершён (разбивка по позициям)")
