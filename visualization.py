@@ -12,7 +12,7 @@ import tempfile
 import os
 
 from config import NEGATIVE_METRICS, METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU
-from calculations import get_position_group, percentile_normalize, format_match_metric
+from calculations import get_position_group, percentile_normalize, format_match_metric, build_match_main_table, create_player_radar_figure
 
 # -------------------- Радары (Plotly) --------------------
 def normalize_for_radar(df, metrics, player_row):
@@ -440,7 +440,9 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
 
     wb.save(output_bytes_io)
     st.success("Экспорт завершён")
-    def export_match_standard_with_charts(df_match, selected_metrics, position_tables, league_avg, output_bytes_io):
+
+# -------------------- Стандартный экспорт матча с диаграммами --------------------
+def export_match_standard_with_charts(df_match, selected_metrics, position_tables, league_avg, output_bytes_io):
     """
     Стандартный экспорт матча в Excel (данные + диаграммы на отдельном листе).
     """
