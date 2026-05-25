@@ -58,11 +58,11 @@ def format_metric_with_detail(metric, value, player_row):
         return f"{value:.2f}"
 
 def format_match_metric(metric, value, player_row, league_avg=None, player_season_val=None):
+    # Специальная обработка для ТТД (числовое значение доли)
     if metric in ['ttd_actions', 'ttd_opp_actions']:
         display_col = f"{metric}_display"
         display_val = player_row.get(display_col, "0/0")
-        main_str = str(display_val) if display_val else "0/0"
-        return main_str
+        return str(display_val) if display_val else "0/0"
 
     if pd.isna(value):
         return "-"
@@ -130,7 +130,8 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
             else:
                 main_str = f"{int(value)}" if value == int(value) else f"{value:.2f}"
 
-    if player_season_val is not None and pd.notna(player_season_val):
+    # Сравнение с сезоном (стрелки)
+    if player_season_val is not None and not pd.isna(player_season_val):
         try:
             season_val = float(player_season_val)
             if not pd.isna(season_val):
@@ -147,7 +148,8 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
         except:
             pass
 
-    if league_avg is not None and pd.notna(league_avg):
+    # Сравнение с лигой (эмодзи)
+    if league_avg is not None and not pd.isna(league_avg):
         try:
             avg = float(league_avg)
             if not pd.isna(avg):
@@ -168,6 +170,7 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
                 return f'{prefix}{main_str}'
         except:
             pass
+
     return main_str
 
 def calculate_ratings(df, position_weights, league_col='league'):
