@@ -1,7 +1,7 @@
-# calculations.py
 import pandas as pd
 import numpy as np
-from config import NEGATIVE_METRICS, METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU
+from config import NEGATIVE_METRICS, METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU, MIN_MINUTES
+from utils import safe_int
 
 def get_position_group(pos):
     if not isinstance(pos, str):
@@ -18,6 +18,7 @@ def percentile_normalize(series):
     return series.fillna(0).rank(pct=True)
 
 def format_metric_with_detail(metric, value, player_row):
+    # ТТД-метрики (сезонные)
     if metric == 'ttd_actions_p90':
         total = player_row.get('actions', 0)
         successful = player_row.get('actions_successful', 0)
@@ -58,7 +59,7 @@ def format_metric_with_detail(metric, value, player_row):
         return f"{value:.2f}"
 
 def format_match_metric(metric, value, player_row, league_avg=None, player_season_val=None):
-    # Обработка ТТД метрик для матчей (они не в MATCH_ALL_METRICS, но могут быть добавлены)
+    # ТТД-метрики для матчей
     if metric == 'ttd_actions':
         total = player_row.get('actions', 0)
         succ = player_row.get('actions_successful', 0)
@@ -66,82 +67,85 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
             main_str = f"{succ}/{total}"
         else:
             main_str = ""
-    elif metric == 'ttd_opp_actions':
+        # Для ТТД не добавляем маркеры (нет средних по лиге)
+        return main_str
+    if metric == 'ttd_opp_actions':
         total = player_row.get('actions_opp_box', 0)
         succ = player_row.get('actions_opp_box_success', 0)
         if total > 0:
             main_str = f"{succ}/{total}"
         else:
             main_str = ""
-    else:
-        if pd.isna(value):
-            return "-"
-        try:
-            value = float(value)
-        except (ValueError, TypeError):
-            return str(value)
+        return main_str
 
-        main_str = f"{value:.2f}"
+    if pd.isna(value):
+        return "-"
+    try:
+        value = float(value)
+    except (ValueError, TypeError):
+        return str(value)
 
-        if metric.endswith('_pct') or metric == 'pass_accuracy':
-            base_col = None
-            if metric == 'pass_accuracy': base_col = 'passes'
-            elif metric == 'dribbles_success_pct': base_col = 'dribbles'
-            elif metric == 'tackles_success_pct': base_col = 'tackles'
-            elif metric == 'challenges_won_pct': base_col = 'challenges'
-            elif metric == 'air_challenges_won_pct': base_col = 'air_challenges'
-            elif metric == 'crosses_accuracy': base_col = 'crosses'
-            elif metric == 'progressive_passes_accuracy': base_col = 'progressive_passes'
-            elif metric == 'passes_final_third_accuracy': base_col = 'passes_final_third'
-            elif metric == 'short_passes_accuracy': base_col = 'short_passes'
-            elif metric == 'long_passes_accuracy': base_col = 'long_passes'
-            elif metric == 'passes_into_penalty_box_accuracy': base_col = 'passes_into_penalty_box'
-            elif metric == 'super_long_passes_accuracy': base_col = 'super_long_passes'
-            elif metric == 'dribbling_final_third_success_pct': base_col = 'dribbling_final_third'
-            elif metric == 'defensive_challenges_won_pct': base_col = 'defensive_challenges'
-            elif metric == 'attacking_challenges_won_pct': base_col = 'attacking_challenges'
-            elif metric == 'shots_on_target_pct': base_col = 'shots'
-            if base_col and base_col in player_row:
-                total = player_row[base_col]
-                if pd.notna(total) and total > 0:
-                    successful = int(round(total * value / 100))
-                    main_str = f"{value:.1f}% ({successful}/{int(total)})"
-                else:
-                    main_str = f"{value:.1f}%"
+    main_str = f"{value:.2f}"
+
+    if metric.endswith('_pct') or metric == 'pass_accuracy':
+        base_col = None
+        if metric == 'pass_accuracy': base_col = 'passes'
+        elif metric == 'dribbles_success_pct': base_col = 'dribbles'
+        elif metric == 'tackles_success_pct': base_col = 'tackles'
+        elif metric == 'challenges_won_pct': base_col = 'challenges'
+        elif metric == 'air_challenges_won_pct': base_col = 'air_challenges'
+        elif metric == 'crosses_accuracy': base_col = 'crosses'
+        elif metric == 'progressive_passes_accuracy': base_col = 'progressive_passes'
+        elif metric == 'passes_final_third_accuracy': base_col = 'passes_final_third'
+        elif metric == 'short_passes_accuracy': base_col = 'short_passes'
+        elif metric == 'long_passes_accuracy': base_col = 'long_passes'
+        elif metric == 'passes_into_penalty_box_accuracy': base_col = 'passes_into_penalty_box'
+        elif metric == 'super_long_passes_accuracy': base_col = 'super_long_passes'
+        elif metric == 'dribbling_final_third_success_pct': base_col = 'dribbling_final_third'
+        elif metric == 'defensive_challenges_won_pct': base_col = 'defensive_challenges'
+        elif metric == 'attacking_challenges_won_pct': base_col = 'attacking_challenges'
+        elif metric == 'shots_on_target_pct': base_col = 'shots'
+        if base_col and base_col in player_row:
+            total = player_row[base_col]
+            if pd.notna(total) and total > 0:
+                successful = int(round(total * value / 100))
+                main_str = f"{value:.1f}% ({successful}/{int(total)})"
             else:
                 main_str = f"{value:.1f}%"
         else:
-            accuracy_col = None
-            if metric + '_accuracy' in player_row:
-                accuracy_col = metric + '_accuracy'
-            elif metric + '_success_pct' in player_row:
-                accuracy_col = metric + '_success_pct'
-            elif metric == 'shots' and 'shots_on_target' in player_row:
-                shots_on_target = player_row.get('shots_on_target')
-                if pd.notna(shots_on_target):
-                    main_str = f"{int(shots_on_target)}/{int(value)}"
-                else:
-                    main_str = f"{value:.2f}"
-            elif metric in ['goals', 'assists', 'xG', 'yellow_cards', 'red_cards',
-                            'mistakes_goals', 'mistakes_chances', 'fouls', 'fouls_suffered']:
-                main_str = f"{value:.2f}"
+            main_str = f"{value:.1f}%"
+    else:
+        accuracy_col = None
+        if metric + '_accuracy' in player_row:
+            accuracy_col = metric + '_accuracy'
+        elif metric + '_success_pct' in player_row:
+            accuracy_col = metric + '_success_pct'
+        elif metric == 'shots' and 'shots_on_target' in player_row:
+            shots_on_target = player_row.get('shots_on_target')
+            if pd.notna(shots_on_target):
+                main_str = f"{int(shots_on_target)}/{int(value)}"
             else:
-                if accuracy_col:
-                    acc_val = player_row.get(accuracy_col)
-                    total = value
-                    if pd.notna(acc_val) and pd.notna(total) and total > 0:
-                        if acc_val <= 100:
-                            successful = int(round(total * acc_val / 100))
-                        else:
-                            successful = int(acc_val)
-                        main_str = f"{successful}/{int(total)}"
+                main_str = f"{value:.2f}"
+        elif metric in ['goals', 'assists', 'xG', 'yellow_cards', 'red_cards',
+                        'mistakes_goals', 'mistakes_chances', 'fouls', 'fouls_suffered']:
+            main_str = f"{value:.2f}"
+        else:
+            if accuracy_col:
+                acc_val = player_row.get(accuracy_col)
+                total = value
+                if pd.notna(acc_val) and pd.notna(total) and total > 0:
+                    if acc_val <= 100:
+                        successful = int(round(total * acc_val / 100))
                     else:
-                        main_str = f"{int(value)}" if value == int(value) else f"{value:.2f}"
+                        successful = int(acc_val)
+                    main_str = f"{successful}/{int(total)}"
                 else:
                     main_str = f"{int(value)}" if value == int(value) else f"{value:.2f}"
+            else:
+                main_str = f"{int(value)}" if value == int(value) else f"{value:.2f}"
 
-    # Стрелка сравнения с сезоном (только для числовых метрик, не для ТТД)
-    if metric not in ['ttd_actions', 'ttd_opp_actions'] and player_season_val is not None and pd.notna(player_season_val):
+    # Стрелка сравнения с сезоном
+    if player_season_val is not None and pd.notna(player_season_val):
         try:
             season_val = float(player_season_val)
             if not pd.isna(season_val):
@@ -158,8 +162,8 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
         except:
             pass
 
-    # Цветные эмодзи для сравнения с лигой (только для числовых метрик)
-    if metric not in ['ttd_actions', 'ttd_opp_actions'] and league_avg is not None and pd.notna(league_avg):
+    # Цветные эмодзи
+    if league_avg is not None and pd.notna(league_avg):
         try:
             avg = float(league_avg)
             if not pd.isna(avg):
@@ -180,7 +184,6 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
                 return f'{prefix}{main_str}'
         except:
             pass
-
     return main_str
 
 def calculate_ratings(df, position_weights, league_col='league'):
@@ -292,7 +295,6 @@ def build_position_tables(df, position_weights):
             tables[pos] = ([], [])
             continue
         metrics = [m for m, w in position_weights.get(pos, {}).items() if w != 0 and m in df.columns]
-        # Добавляем обязательные ТТД, если они есть в данных
         for m in mandatory_metrics:
             if m in df.columns and m not in metrics:
                 metrics.append(m)
@@ -377,15 +379,18 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
             tables[pos] = ([], [])
             continue
         metrics = [m for m, w in position_weights.get(pos, {}).items() if w != 0 and m in df.columns]
-        # Добавляем обязательные ТТД, если есть соответствующие поля в df
+        # Добавляем ТТД, если есть соответствующие колонки
         if 'actions' in df.columns and 'actions_successful' in df.columns:
-            if 'ttd_actions' not in metrics and 'ttd_actions' in df.columns:
+            if 'ttd_actions' not in metrics:
                 metrics.append('ttd_actions')
         if 'actions_opp_box' in df.columns and 'actions_opp_box_success' in df.columns:
-            if 'ttd_opp_actions' not in metrics and 'ttd_opp_actions' in df.columns:
+            if 'ttd_opp_actions' not in metrics:
                 metrics.append('ttd_opp_actions')
-        # Фильтруем метрики: оставляем только те, что есть в df
-        metrics = [m for m in metrics if m in df.columns]
+        if not metrics:
+            tables[pos] = ([], [])
+            continue
+        # Фильтруем метрики, которые реально есть в pos_df
+        metrics = [m for m in metrics if m in pos_df.columns]
         if not metrics:
             tables[pos] = ([], [])
             continue
@@ -405,18 +410,15 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
             player_name = player_row['player']
             row_data = [player_name, int(player_row['minutes']), f"{player_row['rating']:.1f}"]
             for m in metrics:
-                if m not in player_row:
-                    row_data.append('')
-                    continue
                 val = player_row[m]
                 la = league_avg.get(m) if league_avg else None
                 psv = None
                 if player_season_map and player_name in player_season_map:
                     psv = player_season_map[player_name].get(m)
                 formatted = format_match_metric(m, val, player_row, league_avg=la, player_season_val=psv)
-                norm_val = player_row.get(f'{m}_norm_pos', 0.5)
-                is_max = (norm_val == max_vals.get(m, -1))
-                is_min = (norm_val == min_vals.get(m, 2))
+                norm_val = player_row[f'{m}_norm_pos']
+                is_max = (norm_val == max_vals[m])
+                is_min = (norm_val == min_vals[m])
                 if is_max and not is_min:
                     formatted = f"🟢 {formatted}"
                 elif is_min and not is_max:
@@ -438,12 +440,17 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
 
 def build_match_main_table(df, selected_metrics, league_avg=None, player_season_map=None):
     mandatory_metrics = ['ttd_actions', 'ttd_opp_actions']
-    # Отбираем только те метрики, которые есть в df
-    metrics = [m for m in selected_metrics if m in df.columns]
-    # Добавляем обязательные, если они есть в df и ещё не добавлены
-    for m in mandatory_metrics:
-        if m in df.columns and m not in metrics:
+    metrics = []
+    for m in selected_metrics:
+        if m in df.columns:
             metrics.append(m)
+    # Добавляем обязательные ТТД, если есть соответствующие колонки
+    if 'actions' in df.columns and 'actions_successful' in df.columns:
+        if 'ttd_actions' not in metrics:
+            metrics.append('ttd_actions')
+    if 'actions_opp_box' in df.columns and 'actions_opp_box_success' in df.columns:
+        if 'ttd_opp_actions' not in metrics:
+            metrics.append('ttd_opp_actions')
     if not metrics:
         return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
     norm_cols = {}
