@@ -14,7 +14,8 @@ from config import (
 )
 from utils import (
     load_settings, save_settings, load_selected_metrics, save_selected_metrics,
-    load_match_selected_metrics, save_match_selected_metrics
+    load_match_selected_metrics, save_match_selected_metrics,
+    load_match_settings, save_match_settings   # добавить
 )
 from db import (
     check_db_connection, get_leagues, get_seasons_for_leagues,
