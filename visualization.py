@@ -440,3 +440,93 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
 
     wb.save(output_bytes_io)
     st.success("Экспорт завершён")
+    def export_match_standard_with_charts(df_match, selected_metrics, position_tables, league_avg, output_bytes_io):
+    """
+    Стандартный экспорт матча в Excel (данные + диаграммы на отдельном листе).
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+    from openpyxl.utils import get_column_letter
+    from openpyxl.drawing.image import Image
+    import tempfile
+    import os
+    import plotly.io as pio
+
+    wb = Workbook()
+    ws_data = wb.active
+    ws_data.title = 'Данные'
+
+    # 1. Записываем общую таблицу
+    df_main = build_match_main_table(df_match, selected_metrics,
+                                     league_avg=league_avg,
+                                     player_season_map=None)
+    # Записываем в лист 'Данные' начиная с A1
+    for r_idx, row in enumerate(df_main.values, start=1):
+        for c_idx, value in enumerate(row, start=1):
+            ws_data.cell(row=r_idx, column=c_idx, value=value)
+    # Заголовки
+    for c_idx, header in enumerate(df_main.columns, start=1):
+        cell = ws_data.cell(row=1, column=c_idx, value=header)
+        cell.font = Font(bold=True)
+
+    # 2. Записываем таблицы по позициям на тот же лист, начиная с новой строки
+    next_row = len(df_main) + 3
+    for pos, (rows, headers) in position_tables.items():
+        if rows:
+            # Заголовки
+            for col_idx, header in enumerate(headers, start=1):
+                cell = ws_data.cell(row=next_row, column=col_idx, value=header)
+                cell.font = Font(bold=True)
+            next_row += 1
+            # Данные
+            for row in rows:
+                for col_idx, val in enumerate(row, start=1):
+                    ws_data.cell(row=next_row, column=col_idx, value=val)
+                next_row += 1
+            next_row += 1  # пустая строка после каждой позиции
+
+    # 3. Добавляем лист с диаграммами
+    try:
+        pio.kaleido.scope.default_format = "png"
+        chart_sheet = wb.create_sheet("Диаграммы")
+        chart_sheet.column_dimensions['A'].width = 50
+        chart_sheet.row_dimensions[1].height = 30
+        chart_sheet['A1'] = "Диаграммы игроков матча"
+        chart_sheet['A1'].font = Font(bold=True, size=14)
+        current_row = 3
+        for _, player_row in df_match.iterrows():
+            try:
+                fig = create_player_radar_figure(player_row, df_match, st.session_state.match_settings, avg_values=league_avg)
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmpfile:
+                    fig.write_image(tmpfile.name, width=600, height=600, scale=2)
+                    tmp_path = tmpfile.name
+                img = Image(tmp_path)
+                img.width = 400
+                img.height = 400
+                cell = chart_sheet.cell(row=current_row, column=1, value=player_row['player'])
+                cell.font = Font(bold=True)
+                chart_sheet.add_image(img, f'B{current_row}')
+                current_row += 1
+                os.unlink(tmp_path)
+            except Exception as e:
+                st.warning(f"Не удалось создать диаграмму для {player_row['player']}: {e}")
+                continue
+            current_row += 1
+    except Exception as e:
+        st.warning(f"Не удалось добавить лист с диаграммами: {e}")
+
+    # 4. Автоширина для листа 'Данные'
+    for col in ws_data.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            if cell.value:
+                try:
+                    if len(str(cell.value)) > max_len:
+                        max_len = len(str(cell.value))
+                except:
+                    pass
+        ws_data.column_dimensions[col_letter].width = min(max_len + 2, 50)
+
+    wb.save(output_bytes_io)
+    st.success("Стандартный экспорт с диаграммами завершён")
