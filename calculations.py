@@ -18,19 +18,18 @@ def percentile_normalize(series):
     return series.fillna(0).rank(pct=True)
 
 def format_metric_with_detail(metric, value, player_row):
-    # ТТД-метрики (сезонные)
     if metric == 'ttd_actions_p90':
         total = player_row.get('actions', 0)
         successful = player_row.get('actions_successful', 0)
         if total > 0:
             return f"{successful}/{total}"
-        return ""
+        return "0/0"
     if metric == 'ttd_opp_actions_p90':
         total = player_row.get('actions_opp_box', 0)
         successful = player_row.get('actions_opp_box_success', 0)
         if total > 0:
             return f"{successful}/{total}"
-        return ""
+        return "0/0"
 
     if metric.endswith('_pct') or metric == 'pass_accuracy':
         base_col = None
@@ -59,15 +58,12 @@ def format_metric_with_detail(metric, value, player_row):
         return f"{value:.2f}"
 
 def format_match_metric(metric, value, player_row, league_avg=None, player_season_val=None):
-    # ТТД-метрики для матчей (уже текст, не надо обрабатывать как число)
     if metric in ['ttd_actions', 'ttd_opp_actions']:
-        # value уже содержит строку вида "5/10" или пустую строку
-        main_str = str(value) if value else ""
-
-        # Для ТТД метрик не добавляем стрелки и смайлики
+        display_col = f"{metric}_display"
+        display_val = player_row.get(display_col, "0/0")
+        main_str = str(display_val) if display_val else "0/0"
         return main_str
 
-    # Обычные числовые метрики
     if pd.isna(value):
         return "-"
     try:
@@ -134,7 +130,6 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
             else:
                 main_str = f"{int(value)}" if value == int(value) else f"{value:.2f}"
 
-    # Стрелка сравнения с сезоном
     if player_season_val is not None and pd.notna(player_season_val):
         try:
             season_val = float(player_season_val)
@@ -152,7 +147,6 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
         except:
             pass
 
-    # Цветные эмодзи
     if league_avg is not None and pd.notna(league_avg):
         try:
             avg = float(league_avg)
@@ -174,7 +168,6 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
                 return f'{prefix}{main_str}'
         except:
             pass
-
     return main_str
 
 def calculate_ratings(df, position_weights, league_col='league'):
@@ -196,16 +189,13 @@ def _calculate_ratings_for_group(df, position_weights):
     if not valid_metrics:
         df['rating'] = 50.0
         return df
-
     norm_df = pd.DataFrame(index=df.index)
     for m in valid_metrics:
         norm_df[m] = percentile_normalize(df[m])
         if m in NEGATIVE_METRICS:
             norm_df[m] = 1 - norm_df[m]
-
     positions = df['position'].apply(get_position_group)
     ratings = pd.Series(0.5, index=df.index, dtype=float)
-
     for pos, weights in position_weights.items():
         mask = (positions == pos)
         if not mask.any():
@@ -243,8 +233,7 @@ def _calculate_match_ratings_for_group(df, position_weights):
         for m, wgt in w.items():
             if wgt != 0:
                 all_used.add(m)
-    # Исключаем ТТД-метрики из нормализации (они не числовые)
-    valid_metrics = [m for m in all_used if m in df.columns and m not in ['ttd_actions', 'ttd_opp_actions']]
+    valid_metrics = [m for m in all_used if m in df.columns]
     if not valid_metrics:
         df['rating'] = 50.0
         return df
@@ -371,7 +360,6 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
             tables[pos] = ([], [])
             continue
         metrics_from_weights = [m for m, w in position_weights.get(pos, {}).items() if w != 0 and m in df.columns]
-        # Добавляем ТТД, если они есть в данных
         mandatory = [m for m in ttd_metrics if m in df.columns]
         metrics = list(set(metrics_from_weights + mandatory))
         if not metrics:
@@ -379,10 +367,6 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
             continue
         for m in metrics:
             if m not in pos_df.columns:
-                continue
-            # Для ТТД-метрик нормализацию не делаем
-            if m in ttd_metrics:
-                pos_df[f'{m}_norm_pos'] = 0.5
                 continue
             col = pos_df[m]
             min_val, max_val = col.min(), col.max()
@@ -402,20 +386,41 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
                 if m not in player_row:
                     row_data.append('')
                     continue
-                val = player_row[m]
+                if m in ttd_metrics:
+                    display_col = f"{m}_display"
+                    val_display = player_row.get(display_col, "0/0")
+                else:
+                    val_display = player_row[m]
+                num_val = player_row[m]
                 la = league_avg.get(m) if league_avg else None
                 psv = None
                 if player_season_map and player_name in player_season_map:
                     psv = player_season_map[player_name].get(m)
-                formatted = format_match_metric(m, val, player_row, league_avg=la, player_season_val=psv)
-                norm_val = player_row.get(f'{m}_norm_pos', 0.5)
-                is_max = (norm_val == max_vals.get(m, -1))
-                is_min = (norm_val == min_vals.get(m, 2))
-                if is_max and not is_min:
-                    formatted = f"🟢 {formatted}"
-                elif is_min and not is_max:
-                    formatted = f"🔴 {formatted}"
-                row_data.append(formatted)
+                formatted = format_match_metric(m, num_val, player_row, league_avg=la, player_season_val=psv)
+                if m in ttd_metrics:
+                    import re
+                    markers = []
+                    if formatted.startswith("🟢"):
+                        markers.append("🟢")
+                        formatted = formatted[2:]
+                    elif formatted.startswith("🔴"):
+                        markers.append("🔴")
+                        formatted = formatted[2:]
+                    formatted = re.sub(r'^[🔵🟤]\s*', '', formatted)
+                    final = (' '.join(markers) + ' ' if markers else '') + val_display
+                    arrow_match = re.search(r'\((↑|↓)\)$', formatted)
+                    if arrow_match:
+                        final += f" ({arrow_match.group(1)})"
+                    row_data.append(final)
+                else:
+                    norm_val = player_row.get(f'{m}_norm_pos', 0.5)
+                    is_max = (norm_val == max_vals.get(m, -1))
+                    is_min = (norm_val == min_vals.get(m, 2))
+                    if is_max and not is_min:
+                        formatted = f"🟢 {formatted}"
+                    elif is_min and not is_max:
+                        formatted = f"🔴 {formatted}"
+                    row_data.append(formatted)
             rows.append(row_data)
         headers = ['Игрок', 'Мин', 'Рейтинг']
         for m in metrics:
@@ -431,7 +436,6 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
     return tables
 
 def build_match_main_table(df, selected_metrics, league_avg=None, player_season_map=None):
-    # Оставляем только метрики, которые есть в df
     existing_metrics = [m for m in selected_metrics if m in df.columns]
     if not existing_metrics:
         return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
@@ -439,9 +443,6 @@ def build_match_main_table(df, selected_metrics, league_avg=None, player_season_
     ttd_metrics = ['ttd_actions', 'ttd_opp_actions']
     norm_cols = {}
     for m in metrics:
-        if m in ttd_metrics:
-            norm_cols[m] = pd.Series(0.5, index=df.index)
-            continue
         col = df[m]
         min_val, max_val = col.min(), col.max()
         if max_val - min_val == 0:
@@ -467,19 +468,44 @@ def build_match_main_table(df, selected_metrics, league_avg=None, player_season_
         player_name = row['player']
         row_data = [i, player_name, row['position'], int(row['minutes']), f"{row['rating']:.1f}"]
         for m in metrics:
-            val = row[m]
+            if m in ttd_metrics:
+                display_col = f"{m}_display"
+                val_display = row.get(display_col, "0/0")
+                num_val = row[m]
+            else:
+                val_display = row[m]
+                num_val = row[m]
             la = league_avg.get(m) if league_avg else None
             psv = None
             if player_season_map and player_name in player_season_map:
                 psv = player_season_map[player_name].get(m)
-            detail = format_match_metric(m, val, row, league_avg=la, player_season_val=psv)
+            formatted = format_match_metric(m, num_val, row, league_avg=la, player_season_val=psv)
+            if m in ttd_metrics:
+                import re
+                markers = []
+                if formatted.startswith("🟢"):
+                    markers.append("🟢")
+                    formatted = formatted[2:]
+                elif formatted.startswith("🔴"):
+                    markers.append("🔴")
+                    formatted = formatted[2:]
+                formatted = re.sub(r'^[🔵🟤]\s*', '', formatted)
+                final = (' '.join(markers) + ' ' if markers else '') + val_display
+                arrow_match = re.search(r'\((↑|↓)\)$', formatted)
+                if arrow_match:
+                    final += f" ({arrow_match.group(1)})"
+                detail = final
+            else:
+                detail = formatted
             norm_val = norm_cols[m].loc[row.name]
             is_max = (norm_val == max_vals[m])
             is_min = (norm_val == min_vals[m])
             if is_max and not is_min:
-                detail = f"🟢 {detail}"
+                if not detail.startswith("🟢"):
+                    detail = f"🟢 {detail}"
             elif is_min and not is_max:
-                detail = f"🔴 {detail}"
+                if not detail.startswith("🔴"):
+                    detail = f"🔴 {detail}"
             row_data.append(detail)
         main_data.append(row_data)
     return pd.DataFrame(main_data, columns=main_headers)
