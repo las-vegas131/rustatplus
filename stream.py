@@ -309,16 +309,34 @@ with tab_season:
         all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
         metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in all_metrics}
         with st.expander("Настройка колонок общей таблицы"):
-            selected_metrics = st.multiselect(
-                "Выберите метрики для отображения",
-                options=all_metrics,
+            # Все доступные метрики (включая ТТД)
+            all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_active.columns]
+            # Обязательные метрики (ТТД)
+            mandatory_metrics = ['ttd_actions_p90', 'ttd_opp_actions_p90']
+            # Фильтруем, чтобы они были в списке
+            available_metrics = all_metrics[:]
+            # Убираем обязательные из списка для выбора (они будут всегда)
+            selectable_metrics = [m for m in available_metrics if m not in mandatory_metrics]
+            
+            metric_names = {m: METRIC_NAMES_RU.get(m, m) for m in selectable_metrics}
+            # Восстанавливаем сохранённые метрики (без обязательных, они добавятся автоматически)
+            saved = st.session_state.selected_main_metrics if st.session_state.selected_main_metrics else []
+            # Фильтруем сохранённые, чтобы они были в selectable_metrics
+            default_selected = [m for m in saved if m in selectable_metrics]
+            
+            selected_optional = st.multiselect(
+                "Выберите дополнительные метрики для отображения",
+                options=selectable_metrics,
                 format_func=lambda m: metric_names[m],
-                default=st.session_state.selected_main_metrics if st.session_state.selected_main_metrics else all_metrics[:3],
-                key="main_metrics_selector"
+                default=default_selected,
+                key="main_metrics_selector_optional"
             )
-            if selected_metrics != st.session_state.selected_main_metrics:
-                st.session_state.selected_main_metrics = selected_metrics
-                save_selected_metrics(selected_metrics, SELECTED_METRICS_FILE)
+            # Объединяем обязательные и выбранные
+            selected_metrics = mandatory_metrics + selected_optional
+            # Сохраняем только выбранные пользователем (без обязательных)
+            if selected_optional != saved:
+                st.session_state.selected_main_metrics = selected_optional
+                save_selected_metrics(selected_optional, SELECTED_METRICS_FILE)
         if not selected_metrics:
             selected_metrics = all_metrics[:3]
         subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
