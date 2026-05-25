@@ -234,6 +234,8 @@ MATCH_ALL_METRICS = [
 ]
 
 MATCH_METRIC_NAMES_RU = {
+    'ttd_actions': 'ТТД/уд',
+    'ttd_opp_actions': 'ТТД у чужих ворот/уд',
     'goals': 'Голы', 'assists': 'Голевые передачи',
     'shots': 'Удары', 'shots_on_target': 'Удары в створ',
     'goals_by_head': 'Голы головой',
