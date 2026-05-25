@@ -444,15 +444,13 @@ with tab_match:
             else:
                 position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings)
             all_metrics = [m for m in MATCH_ALL_METRICS if m in df_active.columns]
-            if 'ttd_actions' in df_active.columns:
-                all_metrics.append('ttd_actions')
-            if 'ttd_opp_actions' in df_active.columns:
-                all_metrics.append('ttd_opp_actions')
-            mandatory_metrics = []
-            if 'ttd_actions' in df_active.columns:
-                mandatory_metrics.append('ttd_actions')
-            if 'ttd_opp_actions' in df_active.columns:
-                mandatory_metrics.append('ttd_opp_actions')
+            # Добавляем ТТД-метрики, если они есть
+            ttd_metrics = ['ttd_actions', 'ttd_opp_actions']
+            for tm in ttd_metrics:
+                if tm in df_active.columns:
+                    all_metrics.append(tm)
+            # Обязательные метрики для отображения (ТТД)
+            mandatory_metrics = [tm for tm in ttd_metrics if tm in df_active.columns]
             selectable_metrics = [m for m in all_metrics if m not in mandatory_metrics]
             metric_names = {m: MATCH_METRIC_NAMES_RU.get(m, m) for m in selectable_metrics}
             
