@@ -430,6 +430,21 @@ def load_match_stats(match_id, team_ids=None):
             df[col] = pd.to_numeric(df[col], errors='coerce')
             if df[col].max() <= 1.0:
                 df[col] = df[col] * 100
+       # Добавляем ТТД метрики для матча (аналог сезонных, но без пересчёта на 90 минут)
+    if 'actions' in df.columns and 'actions_successful' in df.columns:
+        df['ttd_actions'] = df.apply(
+            lambda row: f"{int(row['actions_successful'])}/{int(row['actions'])}" if row['actions'] > 0 else "",
+            axis=1
+        )
+    else:
+        df['ttd_actions'] = ""
+    if 'actions_opp_box' in df.columns and 'actions_opp_box_success' in df.columns:
+        df['ttd_opp_actions'] = df.apply(
+            lambda row: f"{int(row['actions_opp_box_success'])}/{int(row['actions_opp_box'])}" if row['actions_opp_box'] > 0 else "",
+            axis=1
+        )
+    else:
+        df['ttd_opp_actions'] = "" 
     return df
 
 def get_league_averages(league_name, season):
