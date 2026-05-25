@@ -2,6 +2,21 @@ import os
 import pickle
 import pandas as pd
 
+MATCH_SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_match_selected_metrics.pkl')
+
+def load_match_selected_metrics():
+    if os.path.exists(MATCH_SELECTED_METRICS_FILE):
+        try:
+            with open(MATCH_SELECTED_METRICS_FILE, 'rb') as f:
+                return pickle.load(f)
+        except:
+            pass
+    return None
+
+def save_match_selected_metrics(metrics):
+    with open(MATCH_SELECTED_METRICS_FILE, 'wb') as f:
+        pickle.dump(metrics, f)
+
 def safe_int(val):
     if pd.isna(val) or val is None:
         return 0
