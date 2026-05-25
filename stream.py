@@ -25,7 +25,9 @@ load_dotenv()
 MIN_MINUTES = 90
 TOP_N_FOR_PLOTS = 8
 SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_settings.pkl')
+SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_selected_metrics.pkl')
 
+# Расширенный список метрик (добавлены ТТД/уд и ТТД у чужих ворот/уд)
 ALL_POSSIBLE_METRICS = [
     'goals_p90', 'assists_p90', 'shots_p90', 'shots_on_target_p90',
     'goals_by_head_p90', 'free_kick_shots_p90', 'free_kick_goals_p90',
@@ -75,6 +77,8 @@ ALL_POSSIBLE_METRICS = [
     'open_passes_received_central_third_p90',
     'open_passes_received_final_third_p90',
     'open_passes_received_opponent_box_p90',
+    # Новые метрики для ТТД
+    'ttd_actions_p90', 'ttd_opp_actions_p90'
 ]
 
 NEGATIVE_METRICS = [
@@ -90,6 +94,7 @@ NEGATIVE_METRICS = [
     'fouls', 'actions_unsuccessful',
 ]
 
+# Обновлённые веса для сезонной статистики (добавлены ТТД)
 DEFAULT_METRICS_WEIGHTS = {
     'FW': {
         'goals_p90': 3.0, 'xG_p90': 2.5, 'shots_on_target_p90': 2.0,
@@ -98,6 +103,7 @@ DEFAULT_METRICS_WEIGHTS = {
         'lost_balls_p90': -2.0, 'individual_ball_losses_p90': -1.5,
         'yellow_cards_p90': -0.5, 'red_cards_p90': -3.0, 'mistakes_goals_p90': -2.5,
         'mistakes_chances_p90': -1.0, 'fouls_p90': -0.5,
+        'ttd_actions_p90': 1.0, 'ttd_opp_actions_p90': 1.0,
     },
     'AM': {
         'key_passes_p90': 3.0, 'assists_p90': 2.5, 'progressive_passes_p90': 2.0,
@@ -106,6 +112,7 @@ DEFAULT_METRICS_WEIGHTS = {
         'lost_balls_p90': -1.5, 'individual_ball_losses_p90': -1.0,
         'yellow_cards_p90': -0.5, 'red_cards_p90': -3.0, 'mistakes_goals_p90': -1.5,
         'mistakes_chances_p90': -1.0, 'fouls_p90': -0.5,
+        'ttd_actions_p90': 1.0, 'ttd_opp_actions_p90': 1.0,
     },
     'CM': {
         'pass_accuracy': 3.0, 'progressive_passes_p90': 2.5, 'interceptions_p90': 2.0,
@@ -115,6 +122,7 @@ DEFAULT_METRICS_WEIGHTS = {
         'individual_ball_losses_p90': -1.0, 'yellow_cards_p90': -1.0,
         'red_cards_p90': -3.0, 'mistakes_goals_p90': -2.0, 'mistakes_chances_p90': -1.5,
         'fouls_p90': -0.5,
+        'ttd_actions_p90': 1.0, 'ttd_opp_actions_p90': 1.0,
     },
     'FB': {
         'tackles_p90': 2.5, 'interceptions_p90': 2.0, 'crosses_accuracy': 2.0,
@@ -123,6 +131,7 @@ DEFAULT_METRICS_WEIGHTS = {
         'mistakes_goals_p90': -2.5, 'mistakes_chances_p90': -1.5,
         'lost_balls_own_half_p90': -2.0, 'lost_balls_p90': -1.0,
         'yellow_cards_p90': -1.0, 'red_cards_p90': -3.0, 'fouls_p90': -0.5,
+        'ttd_actions_p90': 1.0, 'ttd_opp_actions_p90': 1.0,
     },
     'CB': {
         'interceptions_p90': 3.0, 'tackles_p90': 2.5, 'air_challenges_won_pct': 2.5,
@@ -131,9 +140,11 @@ DEFAULT_METRICS_WEIGHTS = {
         'mistakes_goals_p90': -3.0, 'mistakes_chances_p90': -2.0,
         'lost_balls_own_half_p90': -2.5, 'individual_ball_losses_p90': -1.5,
         'yellow_cards_p90': -1.0, 'red_cards_p90': -3.5, 'fouls_p90': -1.0,
+        'ttd_actions_p90': 1.0, 'ttd_opp_actions_p90': 1.0,
     },
 }
 
+# Заполнение нулями отсутствующих метрик
 for pos in DEFAULT_METRICS_WEIGHTS:
     for m in ALL_POSSIBLE_METRICS:
         if m not in DEFAULT_METRICS_WEIGHTS[pos]:
@@ -208,6 +219,7 @@ METRIC_NAMES_RU = {
     'open_passes_received_central_third_p90': 'Принято в центр. трети',
     'open_passes_received_final_third_p90': 'Принято в финальной трети',
     'open_passes_received_opponent_box_p90': 'Принято в штрафной',
+    'ttd_actions_p90': 'ТТД/уд (всего/удачные)', 'ttd_opp_actions_p90': 'ТТД у чужих ворот/уд',
 }
 
 # -------------------- БЕЗОПАСНОЕ ПОДКЛЮЧЕНИЕ К БД --------------------
@@ -253,6 +265,19 @@ def load_settings():
 def save_settings(settings_dict):
     with open(SETTINGS_FILE, 'wb') as f:
         pickle.dump(settings_dict, f)
+
+def save_selected_metrics(metrics):
+    with open(SELECTED_METRICS_FILE, 'wb') as f:
+        pickle.dump(metrics, f)
+
+def load_selected_metrics():
+    if os.path.exists(SELECTED_METRICS_FILE):
+        try:
+            with open(SELECTED_METRICS_FILE, 'rb') as f:
+                return pickle.load(f)
+        except:
+            pass
+    return None
 
 def get_position_group(pos):
     if not isinstance(pos, str):
@@ -324,6 +349,22 @@ def _calculate_ratings_for_group(df, position_weights):
     return df
 
 def format_metric_with_detail(metric, value, player_row):
+    # Специальная обработка для ТТД-метрик (вывод дроби)
+    if metric == 'ttd_actions_p90':
+        total = player_row.get('actions', 0)
+        successful = player_row.get('actions_successful', 0)
+        if total > 0:
+            return f"{successful}/{total}"
+        else:
+            return ""
+    if metric == 'ttd_opp_actions_p90':
+        total = player_row.get('actions_opp_box', 0)
+        successful = player_row.get('actions_opp_box_success', 0)
+        if total > 0:
+            return f"{successful}/{total}"
+        else:
+            return ""
+
     if metric.endswith('_pct') or metric == 'pass_accuracy':
         base_col = None
         if metric == 'pass_accuracy': base_col = 'passes'
@@ -677,23 +718,23 @@ def format_match_metric(metric, value, player_row, league_avg=None, player_seaso
         except:
             pass
 
-    # Кружок сравнения с лигой (заменён на цвет фона в экспорте, здесь оставляем для интерфейса)
+    # Цветные эмодзи вместо кружков
     if league_avg is not None and pd.notna(league_avg):
         try:
             avg = float(league_avg)
             if not pd.isna(avg):
                 if metric in NEGATIVE_METRICS:
                     if value < avg:
-                        prefix = '<span style="color: #4169E1;">●</span> '
+                        prefix = '🔵 '
                     elif value > avg:
-                        prefix = '<span style="color: #8B4513;">●</span> '
+                        prefix = '🟤 '
                     else:
                         prefix = ''
                 else:
                     if value > avg:
-                        prefix = '<span style="color: #4169E1;">●</span> '
+                        prefix = '🔵 '
                     elif value < avg:
-                        prefix = '<span style="color: #8B4513;">●</span> '
+                        prefix = '🟤 '
                     else:
                         prefix = ''
                 return f'{prefix}{main_str}'
@@ -985,6 +1026,16 @@ def load_from_db(league_names, seasons, teams=None):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             df[f'{col}_p90'] = np.where(minutes > 0, (df[col] / minutes) * 90, 0)
+
+    # Добавляем метрики ТТД
+    if 'actions' in df.columns and 'actions_successful' in df.columns:
+        df['ttd_actions_total'] = df['actions']
+        df['ttd_actions_successful'] = df['actions_successful']
+        df['ttd_actions_p90'] = np.where(minutes > 0, (df['ttd_actions_total'] / minutes) * 90, 0)
+    if 'actions_opp_box' in df.columns and 'actions_opp_box_success' in df.columns:
+        df['ttd_opp_actions_total'] = df['actions_opp_box']
+        df['ttd_opp_actions_successful'] = df['actions_opp_box_success']
+        df['ttd_opp_actions_p90'] = np.where(minutes > 0, (df['ttd_opp_actions_total'] / minutes) * 90, 0)
 
     return df
 
@@ -1635,7 +1686,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         succ = int(round(t * acc / 100))
         return f"{t}/{succ}"
 
-    # Сбор данных (без изменений)
+    # Сбор данных
     all_rows = []
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
@@ -1724,7 +1775,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         ws[cell].font = Font(name='Calibri', size=11, bold=True)
         ws[cell].alignment = Alignment(horizontal='center')
 
-    # Заголовки (вертикальные)
+    # Заголовки (вертикальные через поворот)
     headers = [
         'Амплуа', 'Игрок', 'Игра', 'Мин',
         'ТТД/уд', 'ТТД у чужих ворот/уд', 'Удары/в створ',
@@ -1736,21 +1787,16 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         'Перехваты/на чужой половине', 'Подборы/на чужой половине',
         'Потери/на своей половине', 'Возвраты/на чужо половине'
     ]
-    # Устанавливаем вертикальное направление текста
     for col_idx, header in enumerate(headers, start=1):
         cell = ws.cell(row=4, column=col_idx, value=header)
         cell.font = Font(name='Calibri', size=11, bold=True)
-        # Вертикальный текст (сверху вниз)
         cell.alignment = Alignment(horizontal='center', vertical='center', textRotation=255, wrapText=False)
-        # Ширина колонок: для первых трёх – 15, для остальных – 6
         if col_idx <= 3:
             ws.column_dimensions[get_column_letter(col_idx)].width = 15
         else:
             ws.column_dimensions[get_column_letter(col_idx)].width = 6
-    ws.row_dimensions[4].height = 120  # высота строки заголовков
-
-    # Закрепление: строка 4 и столбец A
-    ws.freeze_panes = 'B5'
+    ws.row_dimensions[4].height = 120
+    ws.freeze_panes = 'B5'  # закрепляем строку 4 и столбец A
 
     # Заполнение данных
     row_idx = 5
@@ -1799,14 +1845,14 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                             af = float(avg_val)
                             if metric_name in NEGATIVE_METRICS:
                                 if rf < af:
-                                    marker, color = "▲ ", "0000FF"
+                                    marker, color = "🔵 ", "0000FF"
                                 elif rf > af:
-                                    marker, color = "▼ ", "8B4513"
+                                    marker, color = "🟤 ", "8B4513"
                             else:
                                 if rf > af:
-                                    marker, color = "▲ ", "0000FF"
+                                    marker, color = "🔵 ", "0000FF"
                                 elif rf < af:
-                                    marker, color = "▼ ", "8B4513"
+                                    marker, color = "🟤 ", "8B4513"
                         except:
                             pass
                     return (marker + base if marker else base), color
@@ -1836,7 +1882,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
                 ws.cell(row=row_idx, column=10, value=frac(match['passes_total'], match['passes_acc']))
                 ws.cell(row=row_idx, column=11, value=frac(match['prog_total'], match['prog_acc']))
                 ws.cell(row=row_idx, column=12, value=frac(match['ft_total'], match['ft_acc']))
-                ws.cell(row=row_idx, column=13, value=frac(match['ft_total'], match['ft_acc']))
+                ws.cell(row=row_idx, column=13, value=frac(match['ft_total'], match['ft_acc']))  # дубль
                 ws.cell(row=row_idx, column=14, value=frac(match['pen_total'], match['pen_acc']))
                 ws.cell(row=row_idx, column=15, value=match['key_passes'] if match['key_passes'] > 0 else '')
                 ws.cell(row=row_idx, column=16, value=frac(match['crosses_total'], match['crosses_acc']))
@@ -1862,11 +1908,36 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
             else:
                 cell.alignment = Alignment(horizontal='center', vertical='center')
 
+    # Автоширина колонок
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_len:
+                    max_len = len(str(cell.value))
+            except:
+                pass
+        ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
+
     wb.save(output_bytes_io)
-    st.success("Экспорт завершён: вертикальные заголовки, закрепление строк и столбцов")
+    st.success("Экспорт завершён с вертикальными заголовками")
 
 # -------------------- ИНТЕРФЕЙС --------------------
 st.set_page_config(page_title="InStat Analyst", layout="wide")
+
+# Стиль для закрепления заголовков в Streamlit
+st.markdown("""
+<style>
+thead tr th {
+    position: sticky !important;
+    top: 0 !important;
+    background-color: #f0f2f6 !important;
+    z-index: 1;
+}
+</style>
+""", unsafe_allow_html=True)
+
 st.title("Анализ футболистов InStat")
 
 if 'df_db' not in st.session_state:
@@ -1880,7 +1951,8 @@ if 'current_settings' not in st.session_state:
 if 'match_settings' not in st.session_state:
     st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
 if 'selected_main_metrics' not in st.session_state:
-    st.session_state.selected_main_metrics = []
+    saved = load_selected_metrics()
+    st.session_state.selected_main_metrics = saved if saved is not None else []
 if 'avg_source' not in st.session_state:
     st.session_state.avg_source = 'Текущие данные'
 if 'avg_league' not in st.session_state:
@@ -2130,7 +2202,9 @@ with tab_season:
                 default=st.session_state.selected_main_metrics if st.session_state.selected_main_metrics else all_metrics[:3],
                 key="main_metrics_selector"
             )
-        st.session_state.selected_main_metrics = selected_metrics
+            if selected_metrics != st.session_state.selected_main_metrics:
+                st.session_state.selected_main_metrics = selected_metrics
+                save_selected_metrics(selected_metrics)
         if not selected_metrics:
             selected_metrics = all_metrics[:3]
 
@@ -2260,8 +2334,7 @@ with tab_match:
             <div style="font-size:13px; margin-bottom:8px; line-height:1.6;">
             <b>Обозначения:</b><br>
             🟢 – лучший в команде &nbsp;&nbsp; 🔴 – худший в команде<br>
-            <span style="color:#4169E1;">●</span> – выше среднего по лиге &nbsp;&nbsp; 
-            <span style="color:#8B4513;">●</span> – ниже среднего по лиге<br>
+            🔵 – выше среднего по лиге &nbsp;&nbsp; 🟤 – ниже среднего по лиге<br>
             (↑) – в матче лучше своего среднего за сезон &nbsp;&nbsp; (↓) – хуже своего среднего
             </div>
             """, unsafe_allow_html=True)
