@@ -84,7 +84,7 @@ if 'avg_league' not in st.session_state:
 if 'avg_season' not in st.session_state:
     st.session_state.avg_season = None
 
-# -------------------- Боковая панель --------------------
+# Боковая панель
 with st.sidebar:
     st.header("📤 Импорт Excel")
     uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
@@ -304,7 +304,7 @@ with st.sidebar:
         avg_league = None
         avg_season = None
 
-# -------------------- ВКЛАДКА СЕЗОН --------------------
+# Основные вкладки
 tab_season, tab_match = st.tabs(["📈 Сезон", "⚽ Матч"])
 
 with tab_season:
@@ -424,7 +424,6 @@ with tab_season:
     else:
         st.info("Загрузите сезонные данные (в боковой панели)")
 
-# -------------------- ВКЛАДКА МАТЧ --------------------
 with tab_match:
     st.markdown("""
     <style>
@@ -518,7 +517,7 @@ with tab_match:
                     else:
                         st.info(f"Нет игроков позиции {pos} при фильтре минут ≥ {min_minutes_filter}")
 
-            # --- Экспорт в Excel ---
+            # Экспорт в Excel
             st.markdown("---")
             st.subheader("📥 Экспорт матчей")
 
@@ -566,7 +565,7 @@ with tab_match:
                     except Exception as e:
                         st.error(f"Ошибка: {e}")
 
-            # Стандартный экспорт (с диаграммами)
+            # Стандартный экспорт с диаграммами
             if st.button("📥 Экспорт в Excel (стандартный)", key="export_match"):
                 output = io.BytesIO()
                 try:
@@ -586,7 +585,7 @@ with tab_match:
     else:
         st.info("Загрузите матчи (в боковой панели)")
 
-# -------------------- РЕДАКТОР ВЕСОВ (СЕЗОН) --------------------
+# Редакторы весов (сезон и матч) – код без изменений
 if st.session_state.get('show_weights_editor'):
     with st.expander("Редактор весов метрик (сезон)", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
@@ -639,7 +638,6 @@ if st.session_state.get('show_weights_editor'):
                 st.session_state.show_weights_editor = False
                 st.rerun()
 
-# -------------------- РЕДАКТОР ВЕСОВ (МАТЧ) --------------------
 if st.session_state.get('show_match_weights_editor'):
     with st.expander("Редактор весов метрик (матч)", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
