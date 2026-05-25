@@ -1,5 +1,5 @@
 import os
-
+MATCH_SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_match_settings.pkl')
 MIN_MINUTES = 90
 SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_settings.pkl')
 SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_selected_metrics.pkl')
