@@ -4,6 +4,7 @@ import numpy as np
 import psycopg2
 from dotenv import load_dotenv
 import streamlit as st
+import io
 
 from config import MIN_MINUTES, MATCH_ALL_METRICS
 from utils import clean_value
@@ -101,8 +102,7 @@ def check_db_connection():
                      "SUPABASE_USER", "SUPABASE_PASSWORD"]
     missing = [var for var in required_vars if not os.getenv(var)]
     if missing:
-        st.error(f"❌ Отсутствуют переменные окружения: {', '.join(missing)}. "
-                 f"Добавьте их в файл `.env`.")
+        st.error(f"❌ Отсутствуют переменные окружения: {', '.join(missing)}. Добавьте их в файл `.env`.")
         st.stop()
     try:
         conn = psycopg2.connect(**get_db_config())
@@ -121,7 +121,7 @@ def get_leagues():
         cur.close()
         conn.close()
         return leagues
-    except Exception as e:
+    except:
         return []
 
 @st.cache_data(ttl=60)
@@ -212,8 +212,6 @@ def get_matches_for_league(league_name):
 @st.cache_data(ttl=60)
 def load_from_db(league_names, seasons, teams=None):
     conn = psycopg2.connect(**get_db_config())
-    # Базовый запрос с COALESCE для всех метрик, кроме p90 (они вычисляются позже)
-    # Перечислим все колонки, которые ожидаем
     base_cols = [
         'ps.goals', 'ps.assists', 'ps.shots', 'ps.shots_on_target',
         'ps.goals_by_head', 'ps.free_kick_shots', 'ps.free_kick_goals',
@@ -259,13 +257,11 @@ def load_from_db(league_names, seasons, teams=None):
         'ps.open_passes_received_final_third', 'ps.open_passes_received_opponent_box',
         'ps.matches_played', 'ps.starting_lineup'
     ]
-    # Формируем SELECT с COALESCE для каждой колонки (чтобы избежать NULL)
     select_parts = [
         "p.name AS player", "p.position", "ps.minutes_played AS minutes",
         "t.name AS team", "l.name AS league"
     ]
     for col in base_cols:
-        # Убираем префикс ps.
         col_name = col.split('.')[-1]
         select_parts.append(f"COALESCE({col}, 0) AS {col_name}")
     select_clause = ",\n        ".join(select_parts)
@@ -285,11 +281,8 @@ def load_from_db(league_names, seasons, teams=None):
         params.append(teams)
     df = pd.read_sql(query, conn, params=params)
     conn.close()
-
-    # Убираем вратарей
     df = df[~df['position'].str.upper().str.contains('GK', na=False)]
 
-    # Преобразуем проценты (если значения <=1, умножаем на 100)
     pct_cols = [
         'pass_accuracy', 'dribbles_success_pct', 'tackles_success_pct',
         'crosses_accuracy', 'challenges_won_pct', 'air_challenges_won_pct',
@@ -305,7 +298,6 @@ def load_from_db(league_names, seasons, teams=None):
             if df[col].max() <= 1.0:
                 df[col] = df[col] * 100
 
-    # Вычисляем p90 метрики
     minutes = df['minutes'].values
     base_metrics = ['goals', 'assists', 'shots', 'shots_on_target', 'goals_by_head',
                     'free_kick_shots', 'free_kick_goals', 'shots_from_penalty_area',
@@ -331,7 +323,6 @@ def load_from_db(league_names, seasons, teams=None):
         if col in df.columns:
             df[f'{col}_p90'] = np.where(minutes > 0, (df[col] / minutes) * 90, 0)
 
-    # Добавляем ТТД метрики
     if 'actions' in df.columns and 'actions_successful' in df.columns:
         df['ttd_actions_total'] = df['actions']
         df['ttd_actions_successful'] = df['actions_successful']
@@ -340,7 +331,6 @@ def load_from_db(league_names, seasons, teams=None):
         df['ttd_opp_actions_total'] = df['actions_opp_box']
         df['ttd_opp_actions_successful'] = df['actions_opp_box_success']
         df['ttd_opp_actions_p90'] = np.where(minutes > 0, (df['ttd_opp_actions_total'] / minutes) * 90, 0)
-
     return df
 
 @st.cache_data(ttl=60)
@@ -413,7 +403,6 @@ def load_match_stats(match_id, team_ids=None):
         params.append(team_ids)
     df = pd.read_sql(query, conn, params=params)
     conn.close()
-
     df = df[~df['position'].str.upper().str.contains('GK', na=False)]
 
     pct_cols = [
@@ -430,21 +419,30 @@ def load_match_stats(match_id, team_ids=None):
             df[col] = pd.to_numeric(df[col], errors='coerce')
             if df[col].max() <= 1.0:
                 df[col] = df[col] * 100
-       # Добавляем ТТД метрики для матча (аналог сезонных, но без пересчёта на 90 минут)
+
+    # Добавляем ТТД метрики для матча
     if 'actions' in df.columns and 'actions_successful' in df.columns:
-        df['ttd_actions'] = df.apply(
-            lambda row: f"{int(row['actions_successful'])}/{int(row['actions'])}" if row['actions'] > 0 else "",
+        df['ttd_actions_total'] = df['actions'].fillna(0)
+        df['ttd_actions_successful'] = df['actions_successful'].fillna(0)
+        df['ttd_actions'] = np.where(df['ttd_actions_total'] > 0, df['ttd_actions_successful'] / df['ttd_actions_total'], 0)
+        df['ttd_actions_display'] = df.apply(
+            lambda row: f"{int(row['ttd_actions_successful'])}/{int(row['ttd_actions_total'])}" if row['ttd_actions_total'] > 0 else "0/0",
             axis=1
         )
     else:
-        df['ttd_actions'] = ""
+        df['ttd_actions'] = 0
+        df['ttd_actions_display'] = "0/0"
     if 'actions_opp_box' in df.columns and 'actions_opp_box_success' in df.columns:
-        df['ttd_opp_actions'] = df.apply(
-            lambda row: f"{int(row['actions_opp_box_success'])}/{int(row['actions_opp_box'])}" if row['actions_opp_box'] > 0 else "",
+        df['ttd_opp_total'] = df['actions_opp_box'].fillna(0)
+        df['ttd_opp_successful'] = df['actions_opp_box_success'].fillna(0)
+        df['ttd_opp_actions'] = np.where(df['ttd_opp_total'] > 0, df['ttd_opp_successful'] / df['ttd_opp_total'], 0)
+        df['ttd_opp_actions_display'] = df.apply(
+            lambda row: f"{int(row['ttd_opp_successful'])}/{int(row['ttd_opp_total'])}" if row['ttd_opp_total'] > 0 else "0/0",
             axis=1
         )
     else:
-        df['ttd_opp_actions'] = "" 
+        df['ttd_opp_actions'] = 0
+        df['ttd_opp_actions_display'] = "0/0"
     return df
 
 def get_league_averages(league_name, season):
@@ -466,9 +464,7 @@ def get_player_season_stats_df(league_name, season):
     cols = ['player'] + [f'{m}_p90' for m in MATCH_ALL_METRICS if f'{m}_p90' in df.columns]
     return df[cols]
 
-# Импорт из Excel
 def import_season_excel(uploaded_file_content, league_name, season, team_column='Team'):
-    import io
     try:
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
     except ValueError:
@@ -488,7 +484,6 @@ def import_season_excel(uploaded_file_content, league_name, season, team_column=
         return 0
     if 'position' in df.columns:
         df = df[~df['position'].str.upper().str.contains('GK', na=False)]
-
     conn = psycopg2.connect(**get_db_config())
     conn.autocommit = True
     cur = conn.cursor()
@@ -531,7 +526,6 @@ def import_season_excel(uploaded_file_content, league_name, season, team_column=
     return inserted
 
 def import_match_excel(uploaded_file_content, league_name, season, home_team, away_team, match_date, label, which_team='home'):
-    import io
     try:
         df = pd.read_excel(io.BytesIO(uploaded_file_content), sheet_name='Основная статистика')
     except ValueError:
