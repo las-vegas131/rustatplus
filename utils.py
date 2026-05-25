@@ -18,6 +18,12 @@ def frac(total, accuracy_pct):
     succ = int(round(t * acc / 100))
     return f"{t}/{succ}"
 
+def format_shots(shots_on_target, shots_total):
+    """Форматирует удары в виде in_target/total"""
+    if shots_total == 0:
+        return ''
+    return f"{shots_on_target}/{shots_total}"
+
 def clean_value(v):
     if pd.isna(v) or str(v).strip() in ('', '-'):
         return None
