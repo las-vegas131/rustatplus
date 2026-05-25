@@ -148,6 +148,9 @@ def create_position_radar(players_data, full_df, pos_metrics, colors, avg_values
 
 # -------------------- Экспорт в Excel (формат RuStat) --------------------
 def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_year, league_avg, player_season_map, output_bytes_io):
+    """
+    Экспорт матчей в формат RuStat (один лист, вертикальные заголовки, группировка по игрокам).
+    """
     position_ru = {'CB': 'ЦЗ', 'FB': 'КЗ', 'CM': 'НОП', 'CDM': 'НОП',
                    'AM': 'ВОП', 'CAM': 'ВОП', 'CF': 'НАП', 'FW': 'НАП', 'ST': 'НАП'}
     position_order = ['CB', 'FB', 'CM', 'AM', 'FW']
@@ -168,6 +171,7 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
         succ = int(round(t * acc / 100))
         return f"{t}/{succ}"
 
+    # Сбор данных
     all_rows = []
     for match_id in selected_match_ids:
         data = matches_dict.get(match_id)
@@ -396,78 +400,78 @@ def export_matches_advanced(matches_dict, selected_match_ids, team_name, season_
     wb.save(output_bytes_io)
     st.success("Экспорт RuStat завершён")
 
-# -------------------- Стандартный экспорт матча с разбивкой по позициям --------------------
+# -------------------- Стандартный экспорт матча с разбивкой по позициям и средними в заголовках --------------------
 def export_match_standard_position_tables(df_match, selected_metrics, position_tables, league_avg, output_bytes_io):
     """
-    Стандартный экспорт матча в Excel с разбивкой по позициям.
-    В заголовках общей таблицы отображаются средние значения по лиге.
+    Стандартный экспорт матча в Excel с разбивкой по позициям (отдельные листы).
+    В заголовках колонок добавляется среднее по лиге в скобках (без HTML).
     """
     wb = Workbook()
+    # Удаляем стандартный пустой лист
     default_sheet = wb.active
     wb.remove(default_sheet)
 
-    # 1. Лист "Общий рейтинг" (средние по лиге передаются в build_match_main_table)
-    ws_main = wb.create_sheet("Общий рейтинг")
+    # Функция для создания листа с таблицей
+    def create_sheet(wb, sheet_name, data_df, headers, avg_dict=None):
+        ws = wb.create_sheet(sheet_name)
+        # Записываем заголовки
+        for col_idx, header in enumerate(headers, start=1):
+            # Если для этой метрики есть среднее по лиге, добавляем в скобках
+            if avg_dict and header in avg_dict:
+                avg_val = avg_dict[header]
+                if header.endswith('_pct') or header == 'pass_accuracy':
+                    header_text = f"{METRIC_NAMES_RU.get(header, header)} (ср. {avg_val:.1f}%)"
+                else:
+                    header_text = f"{METRIC_NAMES_RU.get(header, header)} (ср. {avg_val:.2f})"
+            else:
+                header_text = METRIC_NAMES_RU.get(header, header)
+            cell = ws.cell(row=1, column=col_idx, value=header_text)
+            cell.font = Font(bold=True)
+        # Записываем данные
+        for r_idx, row in enumerate(data_df.values, start=2):
+            for c_idx, value in enumerate(row, start=1):
+                ws.cell(row=r_idx, column=c_idx, value=value)
+        # Условное форматирование для числовых колонок (начиная с 4-й)
+        for col_idx in range(4, len(headers) + 1):
+            col_letter = get_column_letter(col_idx)
+            ws.conditional_formatting.add(
+                f'{col_letter}2:{col_letter}{len(data_df)+1}',
+                ColorScaleRule(start_type='min', start_color='FFC7CE',
+                               mid_type='percentile', mid_value=50, mid_color='FFFFEB',
+                               end_type='max', end_color='C6EFCE')
+            )
+        # Автоширина
+        for col in ws.columns:
+            max_len = 0
+            col_letter = get_column_letter(col[0].column)
+            for cell in col:
+                if cell.value:
+                    try:
+                        if len(str(cell.value)) > max_len:
+                            max_len = len(str(cell.value))
+                    except:
+                        pass
+            ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
+        return ws
+
+    # 1. Общий рейтинг
     df_main = build_match_main_table(df_match, selected_metrics,
                                      league_avg=league_avg,
                                      player_season_map=None)
-    for col_idx, header in enumerate(df_main.columns, start=1):
-        cell = ws_main.cell(row=1, column=col_idx, value=header)
-        cell.font = Font(bold=True)
-    for r_idx, row in enumerate(df_main.values, start=2):
-        for c_idx, value in enumerate(row, start=1):
-            ws_main.cell(row=r_idx, column=c_idx, value=value)
-    for col_idx in range(4, len(df_main.columns) + 1):
-        col_letter = get_column_letter(col_idx)
-        ws_main.conditional_formatting.add(
-            f'{col_letter}2:{col_letter}{len(df_main)+1}',
-            ColorScaleRule(start_type='min', start_color='FFC7CE',
-                           mid_type='percentile', mid_value=50, mid_color='FFFFEB',
-                           end_type='max', end_color='C6EFCE')
-        )
-    for col in ws_main.columns:
-        max_len = 0
-        col_letter = get_column_letter(col[0].column)
-        for cell in col:
-            if cell.value:
-                try:
-                    if len(str(cell.value)) > max_len:
-                        max_len = len(str(cell.value))
-                except:
-                    pass
-        ws_main.column_dimensions[col_letter].width = min(max_len + 2, 50)
+    # Извлекаем реальные имена метрик из df_main (без HTML)
+    main_headers = df_main.columns.tolist()
+    create_sheet(wb, "Общий рейтинг", df_main, main_headers, league_avg)
 
-    # 2. Листы по позициям (средние по лиге не нужны – они не передаются)
+    # 2. Листы по позициям
     positions = ['FW', 'AM', 'CM', 'FB', 'CB']
     for pos in positions:
         rows, headers = position_tables.get(pos, ([], []))
         if rows:
-            ws = wb.create_sheet(pos)
-            for col_idx, header in enumerate(headers, start=1):
-                cell = ws.cell(row=1, column=col_idx, value=header)
-                cell.font = Font(bold=True)
-            for r_idx, row in enumerate(rows, start=2):
-                for c_idx, val in enumerate(row, start=1):
-                    ws.cell(row=r_idx, column=c_idx, value=val)
-            for col_idx in range(4, len(headers) + 1):
-                col_letter = get_column_letter(col_idx)
-                ws.conditional_formatting.add(
-                    f'{col_letter}2:{col_letter}{len(rows)+1}',
-                    ColorScaleRule(start_type='min', start_color='FFC7CE',
-                                   mid_type='percentile', mid_value=50, mid_color='FFFFEB',
-                                   end_type='max', end_color='C6EFCE')
-                )
-            for col in ws.columns:
-                max_len = 0
-                col_letter = get_column_letter(col[0].column)
-                for cell in col:
-                    if cell.value:
-                        try:
-                            if len(str(cell.value)) > max_len:
-                                max_len = len(str(cell.value))
-                        except:
-                            pass
-                ws.column_dimensions[col_letter].width = min(max_len + 2, 50)
+            # Преобразуем rows и headers в DataFrame для удобства
+            df_pos = pd.DataFrame(rows, columns=headers)
+            # Заголовки: первые три (Игрок, Мин, Рейтинг) не имеют средних
+            # Остальные – ищем соответствие в league_avg
+            create_sheet(wb, pos, df_pos, headers, league_avg)
 
     wb.save(output_bytes_io)
     st.success("Стандартный экспорт завершён (разбивка по позициям)")
