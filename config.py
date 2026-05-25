@@ -3,6 +3,7 @@ import os
 MIN_MINUTES = 90
 SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_settings.pkl')
 SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_selected_metrics.pkl')
+MATCH_SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_match_selected_metrics.pkl')
 
 ALL_POSSIBLE_METRICS = [
     'goals_p90', 'assists_p90', 'shots_p90', 'shots_on_target_p90',
@@ -191,7 +192,7 @@ METRIC_NAMES_RU = {
     'open_passes_received_central_third_p90': 'Принято в центр. трети',
     'open_passes_received_final_third_p90': 'Принято в финальной трети',
     'open_passes_received_opponent_box_p90': 'Принято в штрафной',
-    'ttd_actions_p90': 'ТТД/уд (всего/удачные)',
+    'ttd_actions_p90': 'ТТД/уд',
     'ttd_opp_actions_p90': 'ТТД у чужих ворот/уд',
 }
 
@@ -234,8 +235,6 @@ MATCH_ALL_METRICS = [
 ]
 
 MATCH_METRIC_NAMES_RU = {
-    'ttd_actions': 'ТТД/уд',
-    'ttd_opp_actions': 'ТТД у чужих ворот/уд',
     'goals': 'Голы', 'assists': 'Голевые передачи',
     'shots': 'Удары', 'shots_on_target': 'Удары в створ',
     'goals_by_head': 'Голы головой',
@@ -304,6 +303,8 @@ MATCH_METRIC_NAMES_RU = {
     'open_passes_received_central_third': 'Принято в центр. трети',
     'open_passes_received_final_third': 'Принято в финальной трети',
     'open_passes_received_opponent_box': 'Принято в штрафной',
+    'ttd_actions': 'ТТД/уд',
+    'ttd_opp_actions': 'ТТД у чужих ворот/уд',
 }
 
 DEFAULT_MATCH_WEIGHTS = {
