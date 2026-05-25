@@ -293,7 +293,6 @@ def build_position_tables(df, position_weights):
             tables[pos] = ([], [])
             continue
         metrics = [m for m, w in position_weights.get(pos, {}).items() if w != 0 and m in df.columns]
-        # Добавляем обязательные ТТД, если они есть в данных
         for m in mandatory_metrics:
             if m in df.columns and m not in metrics:
                 metrics.append(m)
@@ -331,7 +330,6 @@ def build_position_tables(df, position_weights):
     return tables
 
 def build_main_table(df, selected_metrics):
-    # Обязательные ТТД-метрики
     mandatory_metrics = ['ttd_actions_p90', 'ttd_opp_actions_p90']
     metrics = [m for m in selected_metrics if m in df.columns]
     for m in mandatory_metrics:
@@ -377,9 +375,7 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
         if pos_df.empty:
             tables[pos] = ([], [])
             continue
-        # Получаем метрики из весов, но только те, что есть в df
         metrics_from_weights = [m for m, w in position_weights.get(pos, {}).items() if w != 0 and m in df.columns]
-        # Добавляем ТТД-метрики, если соответствующие колонки есть
         mandatory_metrics = []
         if 'ttd_actions' in df.columns:
             mandatory_metrics.append('ttd_actions')
@@ -439,11 +435,9 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
     return tables
 
 def build_match_main_table(df, selected_metrics, league_avg=None, player_season_map=None):
-    # Фильтруем только существующие колонки
     existing_metrics = [m for m in selected_metrics if m in df.columns]
     if not existing_metrics:
         return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
-    
     metrics = existing_metrics
     norm_cols = {}
     for m in metrics:
