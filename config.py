@@ -1,9 +1,10 @@
 import os
-MATCH_SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_match_settings.pkl')
+
 MIN_MINUTES = 90
 SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_settings.pkl')
 SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_selected_metrics.pkl')
 MATCH_SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_match_selected_metrics.pkl')
+MATCH_SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_match_settings.pkl')
 
 ALL_POSSIBLE_METRICS = [
     'goals_p90', 'assists_p90', 'shots_p90', 'shots_on_target_p90',
