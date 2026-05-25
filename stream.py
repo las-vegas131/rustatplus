@@ -681,13 +681,11 @@ if st.session_state.get('show_match_weights_editor'):
                             new_weights.setdefault(pos, {})[metric] = weight_val
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Сохранить веса матча", use_container_width=True, key="save_match_weights"):
-                for pos in positions_order:
-                    if pos not in new_weights or not new_weights[pos]:
-                        st.error(f"Для позиции **{pos_names[pos]}** должна быть включена хотя бы одна метрика.")
-                        st.stop()
-                st.session_state.match_settings = new_weights
-                st.session_state.show_match_weights_editor = False
+            if st.button("Сбросить все веса", use_container_width=True):
+                st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
+                st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
+                save_settings(st.session_state.current_settings, SETTINGS_FILE)
+                save_match_settings(st.session_state.match_settings)
                 st.cache_data.clear()
                 st.success("Веса матча обновлены. Данные пересчитываются...")
                 if st.session_state.df_matches:
