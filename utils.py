@@ -1,6 +1,7 @@
 import os
 import pickle
 import pandas as pd
+from config import MATCH_SETTINGS_FILE
 
 def safe_int(val):
     if pd.isna(val) or val is None:
@@ -71,17 +72,14 @@ def save_match_selected_metrics(metrics):
         pickle.dump(metrics, f)
 
 def load_match_settings():
-    from config import MATCH_SETTINGS_FILE
     if os.path.exists(MATCH_SETTINGS_FILE):
         try:
             with open(MATCH_SETTINGS_FILE, 'rb') as f:
-                data = pickle.load(f)
-            return data
+                return pickle.load(f)
         except:
             pass
     return None
 
 def save_match_settings(settings_dict):
-    from config import MATCH_SETTINGS_FILE
     with open(MATCH_SETTINGS_FILE, 'wb') as f:
         pickle.dump(settings_dict, f)
