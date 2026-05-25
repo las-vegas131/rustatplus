@@ -84,7 +84,7 @@ if 'avg_league' not in st.session_state:
 if 'avg_season' not in st.session_state:
     st.session_state.avg_season = None
 
-# Боковая панель (импорт, загрузка и т.д.)
+# -------------------- Боковая панель --------------------
 with st.sidebar:
     st.header("📤 Импорт Excel")
     uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
@@ -304,7 +304,7 @@ with st.sidebar:
         avg_league = None
         avg_season = None
 
-# Основные вкладки
+# -------------------- ВКЛАДКА СЕЗОН --------------------
 tab_season, tab_match = st.tabs(["📈 Сезон", "⚽ Матч"])
 
 with tab_season:
@@ -424,6 +424,7 @@ with tab_season:
     else:
         st.info("Загрузите сезонные данные (в боковой панели)")
 
+# -------------------- ВКЛАДКА МАТЧ --------------------
 with tab_match:
     st.markdown("""
     <style>
@@ -517,13 +518,15 @@ with tab_match:
                     else:
                         st.info(f"Нет игроков позиции {pos} при фильтре минут ≥ {min_minutes_filter}")
 
-            # Экспорт в Excel
+            # --- Экспорт в Excel ---
             st.markdown("---")
-            st.subheader("📥 Экспорт матчей (формат RuStat)")
+            st.subheader("📥 Экспорт матчей")
+
+            # Расширенный экспорт (RuStat)
             col_sel, col_team, col_season = st.columns([2, 1, 1])
             with col_sel:
                 export_match_ids = st.multiselect(
-                    "Выберите матчи для экспорта",
+                    "Выберите матчи для расширенного экспорта (RuStat)",
                     options=list(st.session_state.df_matches.keys()),
                     format_func=lambda mid: st.session_state.df_matches[mid]['label'],
                     key="rustat_export_matches"
@@ -554,7 +557,7 @@ with tab_match:
                         )
                         output.seek(0)
                         st.download_button(
-                            label="Скачать Excel",
+                            label="Скачать Excel (RuStat)",
                             data=output,
                             file_name=f"RuStat_{export_team}_{export_season}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -562,22 +565,24 @@ with tab_match:
                         )
                     except Exception as e:
                         st.error(f"Ошибка: {e}")
-              if st.button("📥 Экспорт в Excel (стандартный)", key="export_match"):
-    output = io.BytesIO()
-    try:
-        export_match_standard_with_charts(
-            df_active, selected_metrics, position_tables_active, league_avg, output
-        )
-        output.seek(0)
-        st.download_button(
-            label="Скачать Excel",
-            data=output,
-            file_name=f"match_players_rating_{selected_label}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="download_standard_match"
-        )
-    except Exception as e:
-        st.error(f"Ошибка при экспорте: {e}")
+
+            # Стандартный экспорт (с диаграммами)
+            if st.button("📥 Экспорт в Excel (стандартный)", key="export_match"):
+                output = io.BytesIO()
+                try:
+                    export_match_standard_with_charts(
+                        df_active, selected_metrics, position_tables_active, league_avg, output
+                    )
+                    output.seek(0)
+                    st.download_button(
+                        label="Скачать Excel",
+                        data=output,
+                        file_name=f"match_players_rating_{selected_label}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_standard_match"
+                    )
+                except Exception as e:
+                    st.error(f"Ошибка при экспорте: {e}")
     else:
         st.info("Загрузите матчи (в боковой панели)")
 
