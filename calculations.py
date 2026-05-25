@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import re
 from config import NEGATIVE_METRICS, METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU, MIN_MINUTES
 from utils import safe_int
 
@@ -58,7 +59,6 @@ def format_metric_with_detail(metric, value, player_row):
         return f"{value:.2f}"
 
 def format_match_metric(metric, value, player_row, league_avg=None, player_season_val=None):
-    # Специальная обработка для ТТД (числовое значение доли)
     if metric in ['ttd_actions', 'ttd_opp_actions']:
         display_col = f"{metric}_display"
         display_val = player_row.get(display_col, "0/0")
@@ -389,41 +389,53 @@ def build_match_position_tables(df, position_weights, league_avg=None, player_se
                 if m not in player_row:
                     row_data.append('')
                     continue
+                val = player_row[m]
+                # Базовое форматирование (без маркеров)
                 if m in ttd_metrics:
                     display_col = f"{m}_display"
-                    val_display = player_row.get(display_col, "0/0")
+                    base_str = player_row.get(display_col, "0/0")
                 else:
-                    val_display = player_row[m]
-                num_val = player_row[m]
+                    base_str = format_match_metric(m, val, player_row, league_avg=None, player_season_val=None)
+                # Маркер лучший/худший
+                norm_val = player_row.get(f'{m}_norm_pos', 0.5)
+                is_max = (norm_val == max_vals.get(m, -1))
+                is_min = (norm_val == min_vals.get(m, 2))
+                if is_max and not is_min:
+                    base_str = f"🟢 {base_str}"
+                elif is_min and not is_max:
+                    base_str = f"🔴 {base_str}"
+                # Сравнение с лигой и сезоном
                 la = league_avg.get(m) if league_avg else None
                 psv = None
                 if player_season_map and player_name in player_season_map:
                     psv = player_season_map[player_name].get(m)
-                formatted = format_match_metric(m, num_val, player_row, league_avg=la, player_season_val=psv)
-                if m in ttd_metrics:
-                    import re
-                    markers = []
-                    if formatted.startswith("🟢"):
-                        markers.append("🟢")
-                        formatted = formatted[2:]
-                    elif formatted.startswith("🔴"):
-                        markers.append("🔴")
-                        formatted = formatted[2:]
-                    formatted = re.sub(r'^[🔵🟤]\s*', '', formatted)
-                    final = (' '.join(markers) + ' ' if markers else '') + val_display
-                    arrow_match = re.search(r'\((↑|↓)\)$', formatted)
-                    if arrow_match:
-                        final += f" ({arrow_match.group(1)})"
-                    row_data.append(final)
-                else:
-                    norm_val = player_row.get(f'{m}_norm_pos', 0.5)
-                    is_max = (norm_val == max_vals.get(m, -1))
-                    is_min = (norm_val == min_vals.get(m, 2))
-                    if is_max and not is_min:
-                        formatted = f"🟢 {formatted}"
-                    elif is_min and not is_max:
-                        formatted = f"🔴 {formatted}"
-                    row_data.append(formatted)
+                detailed = format_match_metric(m, val, player_row, league_avg=la, player_season_val=psv)
+                # Из detailed извлекаем эмодзи и стрелки
+                emoji = ''
+                arrows = ''
+                if detailed and detailed[0] in ['🔵', '🟤']:
+                    emoji = detailed[0]
+                    detailed = detailed[1:].strip()
+                if ' (↑)' in detailed or ' (↓)' in detailed:
+                    if ' (↑)' in detailed:
+                        arrows = ' (↑)'
+                        detailed = detailed.replace(' (↑)', '')
+                    elif ' (↓)' in detailed:
+                        arrows = ' (↓)'
+                        detailed = detailed.replace(' (↓)', '')
+                final = base_str
+                if emoji:
+                    if final.startswith(('🟢', '🔴')):
+                        parts = final.split(' ', 1)
+                        if len(parts) == 2:
+                            final = f"{parts[0]} {emoji} {parts[1]}"
+                        else:
+                            final = f"{parts[0]} {emoji}"
+                    else:
+                        final = f"{emoji} {final}"
+                if arrows:
+                    final += arrows
+                row_data.append(final)
             rows.append(row_data)
         headers = ['Игрок', 'Мин', 'Рейтинг']
         for m in metrics:
@@ -443,7 +455,6 @@ def build_match_main_table(df, selected_metrics, league_avg=None, player_season_
     if not existing_metrics:
         return pd.DataFrame(columns=['№','Игрок','Поз','Мин','Рейтинг'])
     metrics = existing_metrics
-    ttd_metrics = ['ttd_actions', 'ttd_opp_actions']
     norm_cols = {}
     for m in metrics:
         col = df[m]
@@ -471,44 +482,47 @@ def build_match_main_table(df, selected_metrics, league_avg=None, player_season_
         player_name = row['player']
         row_data = [i, player_name, row['position'], int(row['minutes']), f"{row['rating']:.1f}"]
         for m in metrics:
-            if m in ttd_metrics:
-                display_col = f"{m}_display"
-                val_display = row.get(display_col, "0/0")
-                num_val = row[m]
-            else:
-                val_display = row[m]
-                num_val = row[m]
-            la = league_avg.get(m) if league_avg else None
-            psv = None
-            if player_season_map and player_name in player_season_map:
-                psv = player_season_map[player_name].get(m)
-            formatted = format_match_metric(m, num_val, row, league_avg=la, player_season_val=psv)
-            if m in ttd_metrics:
-                import re
-                markers = []
-                if formatted.startswith("🟢"):
-                    markers.append("🟢")
-                    formatted = formatted[2:]
-                elif formatted.startswith("🔴"):
-                    markers.append("🔴")
-                    formatted = formatted[2:]
-                formatted = re.sub(r'^[🔵🟤]\s*', '', formatted)
-                final = (' '.join(markers) + ' ' if markers else '') + val_display
-                arrow_match = re.search(r'\((↑|↓)\)$', formatted)
-                if arrow_match:
-                    final += f" ({arrow_match.group(1)})"
-                detail = final
-            else:
-                detail = formatted
+            val = row[m]
+            # Базовое форматирование (без маркеров)
+            base_str = format_match_metric(m, val, row, league_avg=None, player_season_val=None)
+            # Маркер лучший/худший
             norm_val = norm_cols[m].loc[row.name]
             is_max = (norm_val == max_vals[m])
             is_min = (norm_val == min_vals[m])
             if is_max and not is_min:
-                if not detail.startswith("🟢"):
-                    detail = f"🟢 {detail}"
+                base_str = f"🟢 {base_str}"
             elif is_min and not is_max:
-                if not detail.startswith("🔴"):
-                    detail = f"🔴 {detail}"
-            row_data.append(detail)
+                base_str = f"🔴 {base_str}"
+            # Сравнение с лигой и сезоном
+            la = league_avg.get(m) if league_avg else None
+            psv = None
+            if player_season_map and player_name in player_season_map:
+                psv = player_season_map[player_name].get(m)
+            detailed = format_match_metric(m, val, row, league_avg=la, player_season_val=psv)
+            emoji = ''
+            arrows = ''
+            if detailed and detailed[0] in ['🔵', '🟤']:
+                emoji = detailed[0]
+                detailed = detailed[1:].strip()
+            if ' (↑)' in detailed or ' (↓)' in detailed:
+                if ' (↑)' in detailed:
+                    arrows = ' (↑)'
+                    detailed = detailed.replace(' (↑)', '')
+                elif ' (↓)' in detailed:
+                    arrows = ' (↓)'
+                    detailed = detailed.replace(' (↓)', '')
+            final = base_str
+            if emoji:
+                if final.startswith(('🟢', '🔴')):
+                    parts = final.split(' ', 1)
+                    if len(parts) == 2:
+                        final = f"{parts[0]} {emoji} {parts[1]}"
+                    else:
+                        final = f"{parts[0]} {emoji}"
+                else:
+                    final = f"{emoji} {final}"
+            if arrows:
+                final += arrows
+            row_data.append(final)
         main_data.append(row_data)
     return pd.DataFrame(main_data, columns=main_headers)
