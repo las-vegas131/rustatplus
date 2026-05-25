@@ -444,10 +444,11 @@ with tab_match:
             df_active_full = st.session_state.df_matches[active_match_id]['df']
             min_minutes_filter = st.selectbox("Минимальное время игрока (минуты)", [10, 20, 30, 45], index=3, key="min_minutes_filter")
             df_active = df_active_full[df_active_full['minutes'] >= min_minutes_filter].copy()
-            if 'match_tables' in st.session_state and active_match_id in st.session_state.match_tables:
-                position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings)
-            else:
-                position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings)
+            league_avg = st.session_state.get('league_avg')
+            player_season_map = st.session_state.get('player_season_map')
+            position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings,
+                                                                league_avg=league_avg,
+                                                                player_season_map=player_season_map)
             all_metrics = [m for m in MATCH_ALL_METRICS if m in df_active.columns]
             ttd_metrics = ['ttd_actions', 'ttd_opp_actions']
             for tm in ttd_metrics:
@@ -484,13 +485,10 @@ with tab_match:
             """, unsafe_allow_html=True)
 
             with subtabs[0]:
-                league_avg = st.session_state.get('league_avg')
-                player_season_map = st.session_state.get('player_season_map')
                 df_main = build_match_main_table(df_active, selected_metrics,
                                                 league_avg=league_avg,
                                                 player_season_map=player_season_map)
                 st.write(f'<div class="match-table">{df_main.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
-                # Выбор игрока для радара (общая таблица)
                 player_list = df_active['player'].tolist()
                 selected_player = st.selectbox("Выберите игрока для радара", player_list, key="match_radar_main_select")
                 if selected_player:
@@ -507,7 +505,6 @@ with tab_match:
                         numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
                         df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
                         st.write(f'<div class="match-table">{df_pos.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
-                        # Выбор игрока для радара внутри позиции
                         player_names = [r[0] for r in rows]
                         if player_names:
                             selected_player_pos = st.selectbox(f"Выберите игрока для радара ({pos})", player_names, key=f"radar_player_{pos}")
@@ -551,8 +548,8 @@ with tab_match:
                             export_match_ids,
                             export_team.strip(),
                             export_season.strip(),
-                            st.session_state.get('league_avg'),
-                            st.session_state.get('player_season_map'),
+                            league_avg,
+                            player_season_map,
                             output
                         )
                         output.seek(0)
