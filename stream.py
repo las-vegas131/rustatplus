@@ -72,7 +72,11 @@ if 'current_settings' not in st.session_state:
     else:
         st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
 if 'match_settings' not in st.session_state:
-    st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
+    saved = load_match_settings()
+    if saved is not None:
+        st.session_state.match_settings = saved
+    else:
+        st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
 if 'selected_main_metrics' not in st.session_state:
     saved = load_selected_metrics(SELECTED_METRICS_FILE)
     st.session_state.selected_main_metrics = saved if saved is not None else []
