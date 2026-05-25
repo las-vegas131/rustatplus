@@ -570,7 +570,7 @@ with tab_match:
             if st.button("📥 Экспорт в Excel (стандартный)", key="export_match"):
                 output = io.BytesIO()
                 try:
-                    export_match_standard_with_charts(
+                    export_match_standard_position_tables(
                         df_active, selected_metrics, position_tables_active, league_avg, output
                     )
                     output.seek(0)
