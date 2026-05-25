@@ -1,3 +1,12 @@
+import plotly.io as pio
+
+# Настройка аргументов для безголового режима Chromium в Streamlit Cloud
+pio.kaleido.scope.chromium_args = (
+    "--headless",
+    "--no-sandbox",
+    "--single-process",
+    "--disable-gpu"
+)
 import streamlit as st
 import pandas as pd
 import io
