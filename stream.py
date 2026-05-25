@@ -1,4 +1,3 @@
-import plotly.io as pio
 import streamlit as st
 import pandas as pd
 import io
@@ -15,7 +14,7 @@ from config import (
 from utils import (
     load_settings, save_settings, load_selected_metrics, save_selected_metrics,
     load_match_selected_metrics, save_match_selected_metrics,
-    load_match_settings, save_match_settings   # добавить
+    load_match_settings, save_match_settings
 )
 from db import (
     check_db_connection, get_leagues, get_seasons_for_leagues,
@@ -72,9 +71,9 @@ if 'current_settings' not in st.session_state:
     else:
         st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
 if 'match_settings' not in st.session_state:
-    saved = load_match_settings()
-    if saved is not None:
-        st.session_state.match_settings = saved
+    saved_match = load_match_settings()
+    if saved_match is not None:
+        st.session_state.match_settings = saved_match
     else:
         st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
 if 'selected_main_metrics' not in st.session_state:
@@ -90,7 +89,7 @@ if 'avg_league' not in st.session_state:
 if 'avg_season' not in st.session_state:
     st.session_state.avg_season = None
 
-# Боковая панель
+# Боковая панель (импорт, загрузка и т.д.)
 with st.sidebar:
     st.header("📤 Импорт Excel")
     uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
@@ -289,6 +288,7 @@ with st.sidebar:
         st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
         st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
         save_settings(st.session_state.current_settings, SETTINGS_FILE)
+        save_match_settings(st.session_state.match_settings)
         st.cache_data.clear()
         st.success("Веса сброшены")
         if st.session_state.df_db is not None:
@@ -571,7 +571,7 @@ with tab_match:
                     except Exception as e:
                         st.error(f"Ошибка: {e}")
 
-            # Стандартный экспорт с диаграммами
+            # Стандартный экспорт с разбивкой по позициям (без диаграмм)
             if st.button("📥 Экспорт в Excel (стандартный)", key="export_match"):
                 output = io.BytesIO()
                 try:
@@ -591,7 +591,7 @@ with tab_match:
     else:
         st.info("Загрузите матчи (в боковой панели)")
 
-# Редакторы весов (сезон и матч) – код без изменений
+# -------------------- РЕДАКТОР ВЕСОВ (СЕЗОН) --------------------
 if st.session_state.get('show_weights_editor'):
     with st.expander("Редактор весов метрик (сезон)", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
@@ -644,6 +644,7 @@ if st.session_state.get('show_weights_editor'):
                 st.session_state.show_weights_editor = False
                 st.rerun()
 
+# -------------------- РЕДАКТОР ВЕСОВ (МАТЧ) --------------------
 if st.session_state.get('show_match_weights_editor'):
     with st.expander("Редактор весов метрик (матч)", expanded=True):
         positions_order = ['FW', 'AM', 'CM', 'FB', 'CB']
@@ -681,11 +682,14 @@ if st.session_state.get('show_match_weights_editor'):
                             new_weights.setdefault(pos, {})[metric] = weight_val
         col1, col2 = st.columns(2)
         with col1:
-            if st.button("Сбросить все веса", use_container_width=True):
-                st.session_state.current_settings = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
-                st.session_state.match_settings = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
-                save_settings(st.session_state.current_settings, SETTINGS_FILE)
-                save_match_settings(st.session_state.match_settings)
+            if st.button("Сохранить веса матча", use_container_width=True, key="save_match_weights"):
+                for pos in positions_order:
+                    if pos not in new_weights or not new_weights[pos]:
+                        st.error(f"Для позиции **{pos_names[pos]}** должна быть включена хотя бы одна метрика.")
+                        st.stop()
+                st.session_state.match_settings = new_weights
+                save_match_settings(new_weights)
+                st.session_state.show_match_weights_editor = False
                 st.cache_data.clear()
                 st.success("Веса матча обновлены. Данные пересчитываются...")
                 if st.session_state.df_matches:
