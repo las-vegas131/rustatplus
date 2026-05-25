@@ -12,7 +12,7 @@ import tempfile
 import os
 
 from config import NEGATIVE_METRICS, METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU
-from calculations import get_position_group, percentile_normalize, format_match_metric, build_match_main_table, create_player_radar_figure
+from calculations import get_position_group, percentile_normalize, format_match_metric, build_match_main_table
 
 # -------------------- Радары (Plotly) --------------------
 def normalize_for_radar(df, metrics, player_row):
