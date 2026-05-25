@@ -1,13 +1,9 @@
 import os
 
-# Минимальное количество минут для включения в анализ
 MIN_MINUTES = 90
-
-# Файлы для сохранения настроек
 SETTINGS_FILE = os.path.expanduser('~/InStatAnalyst_settings.pkl')
 SELECTED_METRICS_FILE = os.path.expanduser('~/InStatAnalyst_selected_metrics.pkl')
 
-# Список всех возможных метрик (сезонные, с _p90)
 ALL_POSSIBLE_METRICS = [
     'goals_p90', 'assists_p90', 'shots_p90', 'shots_on_target_p90',
     'goals_by_head_p90', 'free_kick_shots_p90', 'free_kick_goals_p90',
@@ -60,7 +56,6 @@ ALL_POSSIBLE_METRICS = [
     'ttd_actions_p90', 'ttd_opp_actions_p90'
 ]
 
-# Негативные метрики (чем меньше, тем лучше)
 NEGATIVE_METRICS = [
     'lost_balls_p90', 'lost_balls_own_half_p90', 'individual_ball_losses_p90',
     'lost_balls_after_passes_p90', 'challenges_unsuccessful_p90',
@@ -74,7 +69,6 @@ NEGATIVE_METRICS = [
     'fouls', 'actions_unsuccessful',
 ]
 
-# Веса для сезонной статистики (по умолчанию)
 DEFAULT_METRICS_WEIGHTS = {
     'FW': {
         'goals_p90': 3.0, 'xG_p90': 2.5, 'shots_on_target_p90': 2.0,
@@ -123,13 +117,11 @@ DEFAULT_METRICS_WEIGHTS = {
         'ttd_actions_p90': 1.0, 'ttd_opp_actions_p90': 1.0,
     },
 }
-# Заполнение нулями для всех метрик
 for pos in DEFAULT_METRICS_WEIGHTS:
     for m in ALL_POSSIBLE_METRICS:
         if m not in DEFAULT_METRICS_WEIGHTS[pos]:
             DEFAULT_METRICS_WEIGHTS[pos][m] = 0.0
 
-# Русские названия метрик (сезон)
 METRIC_NAMES_RU = {
     'goals_p90': 'Голы', 'assists_p90': 'Голевые передачи',
     'shots_p90': 'Удары', 'shots_on_target_p90': 'Удары в створ',
@@ -203,7 +195,6 @@ METRIC_NAMES_RU = {
     'ttd_opp_actions_p90': 'ТТД у чужих ворот/уд',
 }
 
-# ---- Матчевые метрики ----
 MATCH_ALL_METRICS = [
     'goals', 'assists', 'shots', 'shots_on_target',
     'goals_by_head', 'free_kick_shots', 'free_kick_goals',
@@ -356,7 +347,6 @@ DEFAULT_MATCH_WEIGHTS = {
         'yellow_cards': -1.0, 'red_cards': -3.5, 'fouls': -1.0,
     },
 }
-# Заполняем нулями отсутствующие матчевые метрики
 for pos in DEFAULT_MATCH_WEIGHTS:
     for m in MATCH_ALL_METRICS:
         if m not in DEFAULT_MATCH_WEIGHTS[pos]:
