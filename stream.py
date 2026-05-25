@@ -34,7 +34,6 @@ from visualization import (
 
 st.set_page_config(page_title="InStat Analyst", layout="wide")
 
-# CSS для закрепления заголовков и прозрачного фона
 st.markdown("""
 <style>
 thead tr th {
@@ -85,7 +84,7 @@ if 'avg_league' not in st.session_state:
 if 'avg_season' not in st.session_state:
     st.session_state.avg_season = None
 
-# Боковая панель
+# Боковая панель (импорт, загрузка и т.д.)
 with st.sidebar:
     st.header("📤 Импорт Excel")
     uploaded_file = st.file_uploader("Excel-файл", type="xlsx", key="import_excel")
@@ -360,7 +359,7 @@ with tab_season:
                                 avg_series = df_league[radar_metrics].mean()
                     with col2:
                         fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True, key=f"season_radar_main_{idx}")
 
         for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
             with subtabs[i]:
@@ -396,7 +395,7 @@ with tab_season:
                                 col1, col2, col3 = st.columns([1, 2, 1])
                                 with col2:
                                     fig = create_player_radar_figure(player_row, df_active, st.session_state.current_settings, avg_values=avg_series)
-                                    st.plotly_chart(fig, use_container_width=True)
+                                    st.plotly_chart(fig, use_container_width=True, key=f"season_radar_{pos}_{player_name}")
                 else:
                     st.info(f"Нет игроков позиции {pos}")
         if st.button("📥 Экспорт в Excel", key="export_season"):
@@ -490,18 +489,16 @@ with tab_match:
                 df_main = build_match_main_table(df_active, selected_metrics,
                                                 league_avg=league_avg,
                                                 player_season_map=player_season_map)
-                # Добавляем ключ для обработки выбора строки
                 st.write(f'<div class="match-table">{df_main.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
-                # Радар при клике – используем session_state для хранения выбранного игрока
-                # Проще: добавить selectbox для выбора игрока из списка
+                # Выбор игрока для радара (общая таблица)
                 player_list = df_active['player'].tolist()
-                selected_player = st.selectbox("Выберите игрока для радара", player_list, key="match_radar_player")
+                selected_player = st.selectbox("Выберите игрока для радара", player_list, key="match_radar_main_select")
                 if selected_player:
                     player_row = df_active[df_active['player'] == selected_player].iloc[0]
                     col1, col2, col3 = st.columns([1, 2, 1])
                     with col2:
                         fig = create_player_radar_figure(player_row, df_active, st.session_state.match_settings, avg_values=league_avg)
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True, key=f"match_radar_main_{selected_player}")
 
             for i, pos in enumerate(['FW','AM','CM','FB','CB'], 1):
                 with subtabs[i]:
@@ -510,16 +507,16 @@ with tab_match:
                         numbered_rows = [[j+1] + row for j, row in enumerate(rows)]
                         df_pos = pd.DataFrame(numbered_rows, columns=['№'] + headers)
                         st.write(f'<div class="match-table">{df_pos.to_html(escape=False, index=False)}</div>', unsafe_allow_html=True)
-                        # Для каждой позиции добавляем selectbox для выбора игрока
-                        if len(rows) > 0:
-                            player_names = [r[0] for r in rows]
+                        # Выбор игрока для радара внутри позиции
+                        player_names = [r[0] for r in rows]
+                        if player_names:
                             selected_player_pos = st.selectbox(f"Выберите игрока для радара ({pos})", player_names, key=f"radar_player_{pos}")
                             if selected_player_pos:
                                 player_row = df_active[df_active['player'] == selected_player_pos].iloc[0]
                                 col1, col2, col3 = st.columns([1, 2, 1])
                                 with col2:
                                     fig = create_player_radar_figure(player_row, df_active, st.session_state.match_settings, avg_values=league_avg)
-                                    st.plotly_chart(fig, use_container_width=True)
+                                    st.plotly_chart(fig, use_container_width=True, key=f"match_radar_{pos}_{selected_player_pos}")
                     else:
                         st.info(f"Нет игроков позиции {pos} при фильтре минут ≥ {min_minutes_filter}")
 
