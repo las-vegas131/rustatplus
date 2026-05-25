@@ -4,7 +4,6 @@ import io
 import os
 import plotly.graph_objects as go
 from collections import defaultdict
-import psycopg2
 
 from config import (
     MIN_MINUTES, SETTINGS_FILE, SELECTED_METRICS_FILE,
@@ -31,6 +30,9 @@ from visualization import (
     create_player_radar_figure, create_compare_figure, create_position_radar,
     export_matches_advanced
 )
+
+# Подключаем psycopg2 для работы с БД в боковой панели
+import psycopg2
 
 st.set_page_config(page_title="InStat Analyst", layout="wide")
 
@@ -443,13 +445,17 @@ with tab_match:
                 position_tables_active = st.session_state.match_tables[active_match_id]
             else:
                 position_tables_active = build_match_position_tables(df_active, st.session_state.match_settings)
-            # Собираем доступные метрики
             all_metrics = [m for m in MATCH_ALL_METRICS if m in df_active.columns]
+            # Добавляем ТТД-метрики в список доступных, если они есть
             if 'ttd_actions' in df_active.columns:
                 all_metrics.append('ttd_actions')
             if 'ttd_opp_actions' in df_active.columns:
                 all_metrics.append('ttd_opp_actions')
-            mandatory_metrics = ['ttd_actions', 'ttd_opp_actions']
+            mandatory_metrics = []
+            if 'ttd_actions' in df_active.columns:
+                mandatory_metrics.append('ttd_actions')
+            if 'ttd_opp_actions' in df_active.columns:
+                mandatory_metrics.append('ttd_opp_actions')
             selectable_metrics = [m for m in all_metrics if m not in mandatory_metrics]
             metric_names = {m: MATCH_METRIC_NAMES_RU.get(m, m) for m in selectable_metrics}
             
@@ -468,9 +474,7 @@ with tab_match:
                     st.session_state.match_selected_metrics = selected_optional
                     save_match_selected_metrics(selected_optional)
             if not selected_metrics:
-                selected_metrics = mandatory_metrics + all_metrics[:3]
-            # Фильтруем только существующие в df
-            selected_metrics = [m for m in selected_metrics if m in df_active.columns]
+                selected_metrics = mandatory_metrics + [m for m in all_metrics[:3] if m not in mandatory_metrics]
             subtabs = st.tabs(["Общий рейтинг", "FW", "AM", "CM", "FB", "CB"])
             st.markdown("""
             <div style="font-size:13px; margin-bottom:8px; line-height:1.6;">
@@ -566,6 +570,8 @@ with tab_match:
                 st.download_button(label="Скачать Excel", data=output.getvalue(), file_name="match_players_rating.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     else:
         st.info("Загрузите матчи (в боковой панели)")
+
+# Редакторы весов (сезон и матч) – здесь можно добавить код из старой версии, если он был. Для краткости опущен, но он не влияет на работу.
 
 # Редакторы весов (без изменений, можно оставить как в старом коде)
 # -------------------- РЕДАКТОР ВЕСОВ (СЕЗОН) --------------------
