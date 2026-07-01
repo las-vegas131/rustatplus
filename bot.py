@@ -16,49 +16,42 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Проверка токена
+# Проверка наличия токена
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TOKEN:
     logger.error("❌ TELEGRAM_BOT_TOKEN не задан. Установите переменную окружения.")
     sys.exit(1)
 
-# Импорты из telegram (исправленные)
+# Импорты из telegram (исправленные для версии 20+)
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
-from telegram.constants import ChatAction
+from telegram.constants import ChatAction, ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# Импорт ваших модулей (убедитесь, что они доступны)
+# Импорт ваших модулей (убедитесь, что все файлы в одной папке)
 try:
     from config import *
     from db import *
     from calculations import *
     from visualization import *
+    from utils import load_settings, save_settings, load_match_settings, save_match_settings
 except ImportError as e:
     logger.error(f"❌ Ошибка импорта модулей: {e}")
-    logger.error("Убедитесь, что все файлы (config.py, db.py, calculations.py, visualization.py) находятся в одной папке с bot.py")
+    logger.error("Убедитесь, что все файлы (config.py, db.py, calculations.py, visualization.py, utils.py) находятся в одной папке с bot.py")
     sys.exit(1)
 
-
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# -------------------- ЗАГРУЗКА ВЕСОВ ПРИ СТАРТЕ --------------------
-# Загружаем сохранённые веса из файлов (как в основном приложении)
+# Глобальные переменные для весов (загружаем из файлов)
 current_season_weights = load_settings(SETTINGS_FILE)
 if current_season_weights is None:
     current_season_weights = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
+    save_settings(current_season_weights, SETTINGS_FILE)
 
 current_match_weights = load_match_settings()
 if current_match_weights is None:
     current_match_weights = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
-
-# Состояния для интерактивного редактирования весов
-WEIGHTS_SELECT_POS, WEIGHTS_SELECT_METRIC, WEIGHTS_INPUT_VALUE = range(3)
+    save_match_settings(current_match_weights)
 
 # -------------------- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ --------------------
 def get_main_keyboard():
-    """Основная клавиатура с командами."""
     keyboard = [
         [InlineKeyboardButton("📊 Сезонная статистика", callback_data="season")],
         [InlineKeyboardButton("⚽ Матчевая статистика", callback_data="match")],
@@ -69,22 +62,18 @@ def get_main_keyboard():
     ]
     return InlineKeyboardMarkup(keyboard)
 
-async def send_excel_file(update: Update, context: ContextTypes.DEFAULT_TYPE, df: pd.DataFrame, filename: str, caption: str = None):
-    """Отправляет DataFrame как Excel-файл."""
+async def send_excel_file(update: Update, context: ContextTypes.DEFAULT_TYPE, df: pd.DataFrame, filename: str):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Данные')
     output.seek(0)
-    if caption is None:
-        caption = f"📊 {filename}"
     await context.bot.send_document(
         chat_id=update.effective_chat.id,
         document=InputFile(output, filename=filename),
-        caption=caption
+        caption=f"📊 {filename}"
     )
 
 async def send_radar_image(update: Update, context: ContextTypes.DEFAULT_TYPE, player_row, df, weights, avg_values=None):
-    """Генерирует радар и отправляет изображение."""
     try:
         fig = create_player_radar_figure(player_row, df, weights, avg_values=avg_values)
         img_bytes = fig.to_image(format="png", width=600, height=600, scale=2)
@@ -99,7 +88,6 @@ async def send_radar_image(update: Update, context: ContextTypes.DEFAULT_TYPE, p
 
 # -------------------- ОБРАБОТЧИКИ КОМАНД --------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Команда /start – приветствие и главное меню."""
     await update.message.reply_text(
         "👋 Привет! Я бот InStatAnalyst.\n"
         "Я помогу вам анализировать футбольную статистику. Используйте кнопки ниже.",
@@ -109,12 +97,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📋 Доступные команды:\n"
-        "/season – сезонная статистика (рейтинг игроков)\n"
+        "/season – сезонная статистика\n"
         "/match – матчевая статистика\n"
-        "/radar – построить радар для игрока\n"
-        "/export – экспорт данных в Excel\n"
-        "/weights – настройка весов метрик\n"
-        "Также вы можете использовать кнопки в меню."
+        "/radar – радар игрока\n"
+        "/export – экспорт в Excel\n"
+        "/weights – настройка весов\n"
+        "Или используйте кнопки в меню."
     )
 
 # -------------------- СЕЗОННАЯ СТАТИСТИКА --------------------
@@ -123,7 +111,7 @@ async def season_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     leagues = get_leagues()
     if not leagues:
-        await query.edit_message_text("❌ Нет доступных лиг в базе.")
+        await query.edit_message_text("❌ Нет доступных лиг.")
         return
     keyboard = [[InlineKeyboardButton(l, callback_data=f"season_league_{l}")] for l in leagues]
     await query.edit_message_text("Выберите лигу:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -135,7 +123,7 @@ async def season_league(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['season_league'] = league
     seasons = get_seasons_for_leagues([league])
     if not seasons:
-        await query.edit_message_text("❌ Нет сезонов для выбранной лиги.")
+        await query.edit_message_text("❌ Нет сезонов для этой лиги.")
         return
     keyboard = [[InlineKeyboardButton(s, callback_data=f"season_season_{s}")] for s in seasons]
     await query.edit_message_text(f"Лига: {league}\nВыберите сезон:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -148,20 +136,12 @@ async def season_season(update: Update, context: ContextTypes.DEFAULT_TYPE):
     league = context.user_data.get('season_league')
     teams = get_teams_for_leagues_seasons([league], [season])
     if not teams:
-        await query.edit_message_text("❌ Нет команд для выбранного сезона.")
+        await query.edit_message_text("❌ Нет команд для этого сезона.")
         return
-    # Инициализируем список выбранных команд
-    if 'season_teams' not in context.user_data:
-        context.user_data['season_teams'] = []
-    # Строим клавиатуру с галочками
-    keyboard = []
-    for t in teams:
-        check = "✅ " if t in context.user_data['season_teams'] else ""
-        keyboard.append([InlineKeyboardButton(f"{check}{t}", callback_data=f"season_team_{t}")])
-    keyboard.append([InlineKeyboardButton("📊 Показать рейтинг", callback_data="season_show")])
+    keyboard = [[InlineKeyboardButton(t, callback_data=f"season_team_{t}")] for t in teams]
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="season")])
     await query.edit_message_text(
-        f"Лига: {league}\nСезон: {season}\nВыберите команды (можно несколько):",
+        f"Лига: {league}\nСезон: {season}\nВыберите команду (можно несколько):",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -169,25 +149,24 @@ async def season_team(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     team = query.data.replace("season_team_", "")
-    league = context.user_data.get('season_league')
-    season = context.user_data.get('season_season')
-    # Переключаем состояние команды
     if 'season_teams' not in context.user_data:
         context.user_data['season_teams'] = []
     if team in context.user_data['season_teams']:
         context.user_data['season_teams'].remove(team)
     else:
         context.user_data['season_teams'].append(team)
-    # Обновляем клавиатуру
-    teams = get_teams_for_leagues_seasons([league], [season])
+    current_teams = context.user_data['season_teams']
+    league = context.user_data.get('season_league')
+    season = context.user_data.get('season_season')
+    all_teams = get_teams_for_leagues_seasons([league], [season])
     keyboard = []
-    for t in teams:
-        check = "✅ " if t in context.user_data['season_teams'] else ""
+    for t in all_teams:
+        check = "✅ " if t in current_teams else ""
         keyboard.append([InlineKeyboardButton(f"{check}{t}", callback_data=f"season_team_{t}")])
     keyboard.append([InlineKeyboardButton("📊 Показать рейтинг", callback_data="season_show")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="season")])
     await query.edit_message_text(
-        f"Лига: {league}\nСезон: {season}\nВыбрано команд: {len(context.user_data['season_teams'])}",
+        f"Лига: {league}\nСезон: {season}\nВыбрано команд: {len(current_teams)}\nНажмите на команду для выбора/снятия.",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -209,7 +188,6 @@ async def season_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     df_rated = await loop.run_in_executor(None, calculate_ratings, df_filtered, current_season_weights)
     df_rated = df_rated.sort_values('rating', ascending=False).reset_index(drop=True)
-    # Выбираем метрики для отображения
     all_metrics = [m for m in ALL_POSSIBLE_METRICS if m in df_rated.columns]
     mandatory = ['ttd_actions_p90', 'ttd_opp_actions_p90']
     display_metrics = [m for m in all_metrics if m in mandatory or m in ['goals_p90', 'assists_p90', 'xG_p90', 'key_passes_p90']]
@@ -220,7 +198,7 @@ async def season_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_excel_file(update, context, df_main, filename)
     await query.edit_message_text("✅ Рейтинг отправлен в Excel-файле.")
 
-# -------------------- МАТЧЕВАЯ СТАТИСТИКА (ПОДДЕРЖКА НЕСКОЛЬКИХ МАТЧЕЙ) --------------------
+# -------------------- МАТЧЕВАЯ СТАТИСТИКА --------------------
 async def match_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -229,7 +207,7 @@ async def match_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Нет доступных лиг.")
         return
     keyboard = [[InlineKeyboardButton(l, callback_data=f"match_league_{l}")] for l in leagues]
-    await query.edit_message_text("Выберите лигу для матчей:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.edit_message_text("Выберите лигу:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def match_league(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -240,23 +218,12 @@ async def match_league(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not matches:
         await query.edit_message_text("❌ Нет матчей в этой лиге.")
         return
-    # Инициализируем список выбранных матчей
-    if 'match_ids' not in context.user_data:
-        context.user_data['match_ids'] = []
-    # Строим клавиатуру с галочками
     keyboard = []
     for m in matches:
         label = f"{m[1]} ({m[3]}) {m[4]} vs {m[5]}"
-        check = "✅ " if m[0] in context.user_data['match_ids'] else ""
-        keyboard.append([InlineKeyboardButton(f"{check}{label}", callback_data=f"match_select_{m[0]}")])
-    keyboard.append([InlineKeyboardButton("📊 Показать статистику (объединить)", callback_data="match_show_combined")])
-    keyboard.append([InlineKeyboardButton("📊 Показать статистику (по каждому)", callback_data="match_show_separate")])
+        keyboard.append([InlineKeyboardButton(label, callback_data=f"match_select_{m[0]}")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="match")])
-    await query.edit_message_text(
-        f"Выбрано матчей: {len(context.user_data['match_ids'])}\n"
-        "Выберите матчи (можно несколько). Затем нажмите 'Показать статистику'.",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    await query.edit_message_text("Выберите матч(и) (можно несколько):", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def match_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -268,7 +235,6 @@ async def match_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['match_ids'].remove(match_id)
     else:
         context.user_data['match_ids'].append(match_id)
-    # Обновляем клавиатуру
     league = context.user_data.get('match_league')
     matches = get_matches_for_league(league)
     keyboard = []
@@ -276,79 +242,40 @@ async def match_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
         label = f"{m[1]} ({m[3]}) {m[4]} vs {m[5]}"
         check = "✅ " if m[0] in context.user_data['match_ids'] else ""
         keyboard.append([InlineKeyboardButton(f"{check}{label}", callback_data=f"match_select_{m[0]}")])
-    keyboard.append([InlineKeyboardButton("📊 Показать статистику (объединить)", callback_data="match_show_combined")])
-    keyboard.append([InlineKeyboardButton("📊 Показать статистику (по каждому)", callback_data="match_show_separate")])
+    keyboard.append([InlineKeyboardButton("📊 Показать статистику", callback_data="match_show")])
     keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="match")])
     await query.edit_message_text(
         f"Выбрано матчей: {len(context.user_data['match_ids'])}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def match_show_combined(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Объединяет данные из нескольких матчей в один DataFrame и отправляет Excel."""
+async def match_show(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     match_ids = context.user_data.get('match_ids', [])
     if not match_ids:
         await query.edit_message_text("❌ Выберите хотя бы один матч.")
         return
-    await query.edit_message_text("⏳ Загружаю данные и объединяю матчи...")
+    await query.edit_message_text("⏳ Загружаю данные матча...")
+    match_id = match_ids[0]  # берём первый выбранный
     loop = asyncio.get_running_loop()
-    # Загружаем все матчи и объединяем
-    all_dfs = []
-    for mid in match_ids:
-        df = await loop.run_in_executor(None, load_match_stats, mid, None)
-        if not df.empty:
-            df['match_id'] = mid
-            all_dfs.append(df)
-    if not all_dfs:
-        await query.edit_message_text("❌ Нет данных для выбранных матчей.")
+    df_match = await loop.run_in_executor(None, load_match_stats, match_id, None)
+    if df_match.empty:
+        await query.edit_message_text("❌ Нет данных для этого матча.")
         return
-    combined_df = pd.concat(all_dfs, ignore_index=True)
-    # Рассчитываем рейтинг по объединённым данным
-    df_rated = await loop.run_in_executor(None, calculate_match_ratings, combined_df, current_match_weights)
+    df_rated = await loop.run_in_executor(None, calculate_match_ratings, df_match, current_match_weights)
     df_rated = df_rated.sort_values('rating', ascending=False).reset_index(drop=True)
-    # Строим общую таблицу
+    league_avg = await loop.run_in_executor(None, get_league_averages, context.user_data.get('match_league'), None)
     all_metrics = [m for m in MATCH_ALL_METRICS if m in df_rated.columns]
     if 'ttd_actions' in df_rated.columns:
         all_metrics.append('ttd_actions')
     if 'ttd_opp_actions' in df_rated.columns:
         all_metrics.append('ttd_opp_actions')
-    display_metrics = all_metrics[:10]
-    league_avg = await loop.run_in_executor(None, get_league_averages, context.user_data.get('match_league'), None)
+    display_metrics = all_metrics[:8]
     df_main = build_match_main_table(df_rated, display_metrics, league_avg=league_avg, player_season_map=None)
-    filename = f"matches_combined_{len(match_ids)}.xlsx"
-    await send_excel_file(update, context, df_main, filename, f"Объединённая статистика {len(match_ids)} матчей")
-    await query.edit_message_text("✅ Объединённая статистика отправлена.")
-
-async def match_show_separate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет отдельный Excel-файл для каждого выбранного матча."""
-    query = update.callback_query
-    await query.answer()
-    match_ids = context.user_data.get('match_ids', [])
-    if not match_ids:
-        await query.edit_message_text("❌ Выберите хотя бы один матч.")
-        return
-    await query.edit_message_text("⏳ Загружаю данные...")
-    loop = asyncio.get_running_loop()
-    league_avg = await loop.run_in_executor(None, get_league_averages, context.user_data.get('match_league'), None)
-    for mid in match_ids:
-        df = await loop.run_in_executor(None, load_match_stats, mid, None)
-        if df.empty:
-            await context.bot.send_message(chat_id=update.effective_chat.id, text=f"❌ Нет данных для матча {mid}")
-            continue
-        df_rated = await loop.run_in_executor(None, calculate_match_ratings, df, current_match_weights)
-        df_rated = df_rated.sort_values('rating', ascending=False).reset_index(drop=True)
-        all_metrics = [m for m in MATCH_ALL_METRICS if m in df_rated.columns]
-        if 'ttd_actions' in df_rated.columns:
-            all_metrics.append('ttd_actions')
-        if 'ttd_opp_actions' in df_rated.columns:
-            all_metrics.append('ttd_opp_actions')
-        display_metrics = all_metrics[:10]
-        df_main = build_match_main_table(df_rated, display_metrics, league_avg=league_avg, player_season_map=None)
-        filename = f"match_{mid}.xlsx"
-        await send_excel_file(update, context, df_main, filename, f"Матч #{mid}")
-    await query.edit_message_text("✅ Все матчи отправлены.")
+    filename = f"match_{match_id}.xlsx"
+    await send_excel_file(update, context, df_main, filename)
+    await query.edit_message_text("✅ Матчевая статистика отправлена.")
 
 # -------------------- РАДАР --------------------
 async def radar_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -367,7 +294,6 @@ async def radar_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not leagues:
         await update.message.reply_text("❌ Нет лиг.")
         return
-    # Ищем в первой лиге и первом сезоне (можно расширить)
     league = leagues[0]
     seasons = get_seasons_for_leagues([league])
     if not seasons:
@@ -386,7 +312,7 @@ async def radar_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_radar_image(update, context, player_row, df, current_season_weights, avg_series)
     await update.message.reply_text("✅ Радар отправлен.")
 
-# -------------------- ЭКСПОРТ EXCEL --------------------
+# -------------------- ЭКСПОРТ --------------------
 async def export_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -403,7 +329,7 @@ async def export_season(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def export_match(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await match_start(update, context)
 
-# -------------------- НАСТРОЙКА ВЕСОВ (ИНТЕРАКТИВНОЕ РЕДАКТИРОВАНИЕ) --------------------
+# -------------------- НАСТРОЙКА ВЕСОВ --------------------
 async def weights_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -417,12 +343,6 @@ async def weights_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def weights_season(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("➕ Изменить вес метрики", callback_data="weights_season_edit")],
-        [InlineKeyboardButton("🔄 Сбросить все веса сезона", callback_data="reset_season_weights")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="weights")]
-    ]
-    # Показываем текущие веса кратко
     text = "Текущие веса для сезона:\n"
     for pos, weights in current_season_weights.items():
         pos_name = {'FW':'Нападающие','AM':'Атак. полузащитники','CM':'Центр. полузащитники','FB':'Крайние защитники','CB':'Центр. защитники'}.get(pos, pos)
@@ -430,89 +350,22 @@ async def weights_season(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for m, w in weights.items():
             if w != 0:
                 text += f"  {METRIC_NAMES_RU.get(m, m)}: {w}\n"
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def weights_season_edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    # Показываем список позиций для выбора
-    keyboard = []
-    for pos in ['FW', 'AM', 'CM', 'FB', 'CB']:
-        pos_name = {'FW':'Нападающие','AM':'Атак. полузащитники','CM':'Центр. полузащитники','FB':'Крайние защитники','CB':'Центр. защитники'}.get(pos, pos)
-        keyboard.append([InlineKeyboardButton(pos_name, callback_data=f"weights_season_pos_{pos}")])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="weights_season")])
-    await query.edit_message_text("Выберите позицию для редактирования весов:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def weights_season_pos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    pos = query.data.replace("weights_season_pos_", "")
-    context.user_data['edit_pos'] = pos
-    # Показываем список метрик с текущими весами
-    weights = current_season_weights.get(pos, {})
-    keyboard = []
-    for m, w in weights.items():
-        if w != 0:
-            keyboard.append([InlineKeyboardButton(f"{METRIC_NAMES_RU.get(m, m)}: {w}", callback_data=f"weights_season_metric_{m}")])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="weights_season_edit")])
-    await query.edit_message_text(
-        f"Позиция: {pos}\nВыберите метрику для изменения веса:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def weights_season_metric(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    metric = query.data.replace("weights_season_metric_", "")
-    context.user_data['edit_metric'] = metric
-    await query.edit_message_text(
-        f"Введите новое значение веса для метрики '{METRIC_NAMES_RU.get(metric, metric)}'\n"
-        "Текущее значение: {:.1f}\n"
-        "Введите число (может быть отрицательным):".format(current_season_weights[context.user_data['edit_pos']].get(metric, 0))
-    )
-    context.user_data['edit_type'] = 'season'
-    return ConversationHandler.END  # Мы не используем ConversationHandler, просто переключаем состояние
-
-async def weights_season_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстового ввода для изменения веса."""
-    if 'edit_type' not in context.user_data or context.user_data['edit_type'] != 'season':
-        return
-    try:
-        new_weight = float(update.message.text.strip())
-    except ValueError:
-        await update.message.reply_text("❌ Пожалуйста, введите число.")
-        return
-    pos = context.user_data.get('edit_pos')
-    metric = context.user_data.get('edit_metric')
-    if not pos or not metric:
-        await update.message.reply_text("❌ Ошибка: не выбрана позиция или метрика.")
-        return
-    # Обновляем веса
-    current_season_weights[pos][metric] = new_weight
-    save_settings(current_season_weights, SETTINGS_FILE)
-    await update.message.reply_text(f"✅ Вес для {METRIC_NAMES_RU.get(metric, metric)} изменён на {new_weight:.1f}")
-    # Возвращаем в главное меню весов
-    context.user_data['edit_type'] = None
-    context.user_data['edit_pos'] = None
-    context.user_data['edit_metric'] = None
-    keyboard = [[InlineKeyboardButton("🔙 Назад в меню весов", callback_data="weights_season")]]
-    await update.message.reply_text("Возврат в меню весов.", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [
+        [InlineKeyboardButton("🔄 Сбросить веса сезона", callback_data="reset_season_weights")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="weights")]
+    ]
+    await query.edit_message_text(text[:4000], reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def reset_season_weights(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global current_season_weights
     current_season_weights = {pos: w.copy() for pos, w in DEFAULT_METRICS_WEIGHTS.items()}
     save_settings(current_season_weights, SETTINGS_FILE)
-    await update.callback_query.answer("Веса сезона сброшены к значениям по умолчанию.")
-    await update.callback_query.edit_message_text("✅ Веса сезона сброшены.")
+    await update.callback_query.answer("Веса сезона сброшены.")
+    await update.callback_query.edit_message_text("✅ Веса сезона сброшены к значениям по умолчанию.")
 
 async def weights_match(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("➕ Изменить вес метрики", callback_data="weights_match_edit")],
-        [InlineKeyboardButton("🔄 Сбросить все веса матчей", callback_data="reset_match_weights")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="weights")]
-    ]
     text = "Текущие веса для матчей:\n"
     for pos, weights in current_match_weights.items():
         pos_name = {'FW':'Нападающие','AM':'Атак. полузащитники','CM':'Центр. полузащитники','FB':'Крайние защитники','CB':'Центр. защитники'}.get(pos, pos)
@@ -520,77 +373,20 @@ async def weights_match(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for m, w in weights.items():
             if w != 0:
                 text += f"  {MATCH_METRIC_NAMES_RU.get(m, m)}: {w}\n"
-    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def weights_match_edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = []
-    for pos in ['FW', 'AM', 'CM', 'FB', 'CB']:
-        pos_name = {'FW':'Нападающие','AM':'Атак. полузащитники','CM':'Центр. полузащитники','FB':'Крайние защитники','CB':'Центр. защитники'}.get(pos, pos)
-        keyboard.append([InlineKeyboardButton(pos_name, callback_data=f"weights_match_pos_{pos}")])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="weights_match")])
-    await query.edit_message_text("Выберите позицию для редактирования весов:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def weights_match_pos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    pos = query.data.replace("weights_match_pos_", "")
-    context.user_data['edit_pos'] = pos
-    weights = current_match_weights.get(pos, {})
-    keyboard = []
-    for m, w in weights.items():
-        if w != 0:
-            keyboard.append([InlineKeyboardButton(f"{MATCH_METRIC_NAMES_RU.get(m, m)}: {w}", callback_data=f"weights_match_metric_{m}")])
-    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="weights_match_edit")])
-    await query.edit_message_text(
-        f"Позиция: {pos}\nВыберите метрику для изменения веса:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def weights_match_metric(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    metric = query.data.replace("weights_match_metric_", "")
-    context.user_data['edit_metric'] = metric
-    await query.edit_message_text(
-        f"Введите новое значение веса для метрики '{MATCH_METRIC_NAMES_RU.get(metric, metric)}'\n"
-        "Текущее значение: {:.1f}\n"
-        "Введите число (может быть отрицательным):".format(current_match_weights[context.user_data['edit_pos']].get(metric, 0))
-    )
-    context.user_data['edit_type'] = 'match'
-
-async def weights_match_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик текстового ввода для изменения веса матча."""
-    if 'edit_type' not in context.user_data or context.user_data['edit_type'] != 'match':
-        return
-    try:
-        new_weight = float(update.message.text.strip())
-    except ValueError:
-        await update.message.reply_text("❌ Пожалуйста, введите число.")
-        return
-    pos = context.user_data.get('edit_pos')
-    metric = context.user_data.get('edit_metric')
-    if not pos or not metric:
-        await update.message.reply_text("❌ Ошибка: не выбрана позиция или метрика.")
-        return
-    current_match_weights[pos][metric] = new_weight
-    save_match_settings(current_match_weights)
-    await update.message.reply_text(f"✅ Вес для {MATCH_METRIC_NAMES_RU.get(metric, metric)} изменён на {new_weight:.1f}")
-    context.user_data['edit_type'] = None
-    context.user_data['edit_pos'] = None
-    context.user_data['edit_metric'] = None
-    keyboard = [[InlineKeyboardButton("🔙 Назад в меню весов", callback_data="weights_match")]]
-    await update.message.reply_text("Возврат в меню весов.", reply_markup=InlineKeyboardMarkup(keyboard))
+    keyboard = [
+        [InlineKeyboardButton("🔄 Сбросить веса матчей", callback_data="reset_match_weights")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="weights")]
+    ]
+    await query.edit_message_text(text[:4000], reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def reset_match_weights(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global current_match_weights
     current_match_weights = {pos: w.copy() for pos, w in DEFAULT_MATCH_WEIGHTS.items()}
     save_match_settings(current_match_weights)
-    await update.callback_query.answer("Веса матчей сброшены к значениям по умолчанию.")
-    await update.callback_query.edit_message_text("✅ Веса матчей сброшены.")
+    await update.callback_query.answer("Веса матчей сброшены.")
+    await update.callback_query.edit_message_text("✅ Веса матчей сброшены к значениям по умолчанию.")
 
-# -------------------- ОБЩИЙ ОБРАБОТЧИК КНОПОК --------------------
+# -------------------- ОБРАБОТЧИК КНОПОК --------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
@@ -622,15 +418,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await match_league(update, context)
         elif data.startswith("match_select_"):
             await match_select(update, context)
-        elif data == "match_show_combined":
-            await match_show_combined(update, context)
-        elif data == "match_show_separate":
-            await match_show_separate(update, context)
+        elif data == "match_show":
+            await match_show(update, context)
     elif data.startswith("export_"):
         if data == "export_season":
-            await season_start(update, context)
+            await export_season(update, context)
         elif data == "export_match":
-            await match_start(update, context)
+            await export_match(update, context)
     elif data.startswith("weights_"):
         if data == "weights_season":
             await weights_season(update, context)
@@ -640,45 +434,33 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await reset_season_weights(update, context)
         elif data == "reset_match_weights":
             await reset_match_weights(update, context)
-        elif data == "weights_season_edit":
-            await weights_season_edit_start(update, context)
-        elif data.startswith("weights_season_pos_"):
-            await weights_season_pos(update, context)
-        elif data.startswith("weights_season_metric_"):
-            await weights_season_metric(update, context)
-        elif data == "weights_match_edit":
-            await weights_match_edit_start(update, context)
-        elif data.startswith("weights_match_pos_"):
-            await weights_match_pos(update, context)
-        elif data.startswith("weights_match_metric_"):
-            await weights_match_metric(update, context)
 
 # -------------------- ЗАПУСК БОТА --------------------
 def main():
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise ValueError("TELEGRAM_BOT_TOKEN не задан в .env")
-    application = Application.builder().token(token).build()
+    try:
+        logger.info("🚀 Запуск бота...")
+        application = Application.builder().token(TOKEN).build()
 
-    # Обработчики команд
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("season", season_start))
-    application.add_handler(CommandHandler("match", match_start))
-    application.add_handler(CommandHandler("radar", radar_start))
-    application.add_handler(CommandHandler("export", export_start))
-    application.add_handler(CommandHandler("weights", weights_start))
+        # Команды
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("season", season_start))
+        application.add_handler(CommandHandler("match", match_start))
+        application.add_handler(CommandHandler("radar", radar_start))
+        application.add_handler(CommandHandler("export", export_start))
+        application.add_handler(CommandHandler("weights", weights_start))
 
-    # Обработчики инлайн-кнопок
-    application.add_handler(CallbackQueryHandler(button_handler))
+        # Обработчики кнопок
+        application.add_handler(CallbackQueryHandler(button_handler))
 
-    # Обработчики текстовых сообщений (для ввода имени игрока и весов)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, radar_input))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, weights_season_input))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, weights_match_input))
+        # Обработчик текста для радара
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, radar_input))
 
-    logger.info("Бот запущен и готов к работе.")
-    application.run_polling()
+        logger.info("✅ Бот успешно запущен и готов к работе.")
+        application.run_polling()
+    except Exception as e:
+        logger.error(f"❌ Критическая ошибка: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
