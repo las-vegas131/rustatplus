@@ -1,41 +1,43 @@
 import os
 import logging
-import io
+import sys
 import asyncio
-import re
-import json
+import io
 from datetime import datetime
+from dotenv import load_dotenv
 
-import pandas as pd
-import plotly.io as pio
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, ChatAction
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, ConversationHandler
-from telegram.constants import ParseMode
+load_dotenv()
 
-# Импорт ваших модулей
-from config import (
-    MIN_MINUTES, SETTINGS_FILE, SELECTED_METRICS_FILE,
-    ALL_POSSIBLE_METRICS, DEFAULT_METRICS_WEIGHTS, DEFAULT_MATCH_WEIGHTS,
-    METRIC_NAMES_RU, MATCH_METRIC_NAMES_RU, MATCH_ALL_METRICS
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
 )
-from db import (
-    get_leagues, get_seasons_for_leagues, get_teams_for_leagues_seasons,
-    get_teams_for_league, get_matches_for_league, load_from_db,
-    load_match_stats, get_league_averages, get_player_season_stats_df
-)
-from calculations import (
-    calculate_ratings, calculate_match_ratings,
-    build_main_table, build_position_tables,
-    build_match_main_table, build_match_position_tables,
-    get_position_group
-)
-from visualization import (
-    create_player_radar_figure,
-    export_matches_advanced, export_match_standard_position_tables
-)
-from utils import (
-    load_settings, save_settings, load_match_settings, save_match_settings
-)
+logger = logging.getLogger(__name__)
+
+# Проверка токена
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not TOKEN:
+    logger.error("❌ TELEGRAM_BOT_TOKEN не задан. Установите переменную окружения.")
+    sys.exit(1)
+
+# Импорты из telegram (исправленные)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
+from telegram.constants import ChatAction
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+
+# Импорт ваших модулей (убедитесь, что они доступны)
+try:
+    from config import *
+    from db import *
+    from calculations import *
+    from visualization import *
+except ImportError as e:
+    logger.error(f"❌ Ошибка импорта модулей: {e}")
+    logger.error("Убедитесь, что все файлы (config.py, db.py, calculations.py, visualization.py) находятся в одной папке с bot.py")
+    sys.exit(1)
+
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
